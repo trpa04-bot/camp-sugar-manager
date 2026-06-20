@@ -1,0 +1,57 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "camp-sugar-manager",
+          "appId": "1:267481772614:android:a54ead80fcbc297b0d9047",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "camp-sugar-manager",
+          "appId": "1:267481772614:ios:52d31d9815643e050d9047",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "macos": {
+        "default": {
+          "projectId": "camp-sugar-manager",
+          "appId": "1:267481772614:ios:52d31d9815643e050d9047",
+          "uploadDebugSymbols": false,
+          "fileOutput": "macos/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "camp-sugar-manager",
+          "configurations": {
+            "android": "1:267481772614:android:a54ead80fcbc297b0d9047",
+            "ios": "1:267481772614:ios:52d31d9815643e050d9047",
+            "macos": "1:267481772614:ios:52d31d9815643e050d9047",
+            "web": "1:267481772614:web:f9cb672ff46da7ab0d9047"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "267481772614",
+    "project_id": "camp-sugar-manager",
+    "storage_bucket": "camp-sugar-manager.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:267481772614:android:a54ead80fcbc297b0d9047",
+        "android_client_info": {
+          "package_name": "com.example.camp_sugar_manager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWoZXjfgPj4nZZpnZI0fSsDUrObjzAGg8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
