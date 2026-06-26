@@ -1,6 +1,8 @@
 GitHub Actions in this project use the Firebase Hosting workflow in `.github/workflows/firebase-hosting.yml`.
 Deploy is executed with the Firebase CLI directly (service account auth), not with the FirebaseExtended deploy action.
 
+Because FlutterFire adds a top-level `flutter` key to `firebase.json`, the workflow generates `firebase.ci.json` (same config without `flutter`) and uses that file for CI deploy commands.
+
 Required repository secret:
 
 - `FIREBASE_SERVICE_ACCOUNT_CAMP_SUGAR_MANAGER`

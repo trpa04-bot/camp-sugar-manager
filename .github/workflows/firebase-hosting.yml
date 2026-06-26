@@ -67,13 +67,17 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
+      - name: Build CI Firebase config
+        run: |
+          node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('firebase.json','utf8')); delete c.flutter; fs.writeFileSync('firebase.ci.json', JSON.stringify(c,null,2));"
+
       - name: Deploy PR preview to Firebase Hosting channel
-        run: firebase hosting:channel:deploy pr-${{ github.event.number }} --expires 7d --project camp-sugar-manager
+        run: firebase hosting:channel:deploy pr-${{ github.event.number }} --expires 7d --project camp-sugar-manager --config firebase.ci.json
 
   deploy_live:
     if: github.event_name == 'push'
@@ -97,10 +101,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
+      - name: Build CI Firebase config
+        run: |
+          node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('firebase.json','utf8')); delete c.flutter; fs.writeFileSync('firebase.ci.json', JSON.stringify(c,null,2));"
+
       - name: Deploy live to Firebase Hosting
-        run: firebase deploy --only hosting --project camp-sugar-manager
+        run: firebase deploy --only hosting --project camp-sugar-manager --config firebase.ci.json
