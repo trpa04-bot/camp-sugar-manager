@@ -89,10 +89,42 @@ jobs:
           name: web-build
           path: build/web
 
+      - name: Normalize Google Cloud credentials
+        id: gcp_credentials
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_CAMP_SUGAR_MANAGER }}
+        run: |
+          set -euo pipefail
+
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -e . >/dev/null 2>&1; then
+            credentials_json="$FIREBASE_SERVICE_ACCOUNT"
+          else
+            credentials_json="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode 2>/dev/null)" || {
+              echo 'Error: Credentials are neither valid JSON nor valid base64-encoded JSON' >&2
+              exit 1
+            }
+            printf '%s' "$credentials_json" | jq -e . >/dev/null || {
+              echo 'Error: Decoded credentials are not valid JSON' >&2
+              exit 1
+            }
+          fi
+
+          private_key="$(printf '%s' "$credentials_json" | jq -r '.private_key // empty')"
+          client_email="$(printf '%s' "$credentials_json" | jq -r '.client_email // empty')"
+          echo "::add-mask::$credentials_json"
+          [ -n "$private_key" ] && echo "::add-mask::$private_key"
+          [ -n "$client_email" ] && echo "::add-mask::$client_email"
+          {
+            echo 'credentials_json<<EOF'
+            printf '%s\n' "$credentials_json"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_CAMP_SUGAR_MANAGER }}
+          credentials_json: ${{ steps.gcp_credentials.outputs.credentials_json }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
