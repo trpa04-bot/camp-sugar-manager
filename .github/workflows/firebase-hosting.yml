@@ -101,7 +101,7 @@ jobs:
             credentials_json="$FIREBASE_SERVICE_ACCOUNT"
           else
             credentials_json="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode 2>/dev/null)" || {
-              echo 'Error: Failed to decode base64 credentials' >&2
+              echo 'Error: Credentials are neither valid JSON nor valid base64-encoded JSON' >&2
               exit 1
             }
             printf '%s' "$credentials_json" | jq -e . >/dev/null || {
