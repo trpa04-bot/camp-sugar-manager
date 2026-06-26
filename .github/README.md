@@ -1,4 +1,5 @@
 GitHub Actions in this project use the Firebase Hosting workflow in `.github/workflows/firebase-hosting.yml`.
+Deploy is executed with the Firebase CLI directly (service account auth), not with the FirebaseExtended deploy action.
 
 Required repository secret:
 
