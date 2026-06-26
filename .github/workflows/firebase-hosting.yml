@@ -100,14 +100,21 @@ jobs:
           if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | jq -e . >/dev/null 2>&1; then
             credentials_json="$FIREBASE_SERVICE_ACCOUNT"
           else
-            credentials_json="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode)"
+            credentials_json="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode 2>/dev/null)" || {
+              echo 'Error: Failed to decode base64 credentials' >&2
+              exit 1
+            }
             printf '%s' "$credentials_json" | jq -e . >/dev/null || {
               echo 'Error: Decoded credentials are not valid JSON' >&2
               exit 1
             }
           fi
 
+          private_key="$(printf '%s' "$credentials_json" | jq -r '.private_key // empty')"
+          client_email="$(printf '%s' "$credentials_json" | jq -r '.client_email // empty')"
           echo "::add-mask::$credentials_json"
+          [ -n "$private_key" ] && echo "::add-mask::$private_key"
+          [ -n "$client_email" ] && echo "::add-mask::$client_email"
           {
             echo 'credentials_json<<EOF'
             printf '%s\n' "$credentials_json"
