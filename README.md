@@ -15,3 +15,16 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+## GitHub Deploy
+
+This repository now includes a GitHub Actions workflow for Firebase Hosting:
+
+- pull requests to `main` create preview deploys
+- pushes to `main` deploy the Flutter web build to live hosting
+
+Before it can run, add the repository secret:
+
+- `FIREBASE_SERVICE_ACCOUNT_CAMP_SUGAR_MANAGER`
+
+See [.github/README.md](.github/README.md) for setup details.
