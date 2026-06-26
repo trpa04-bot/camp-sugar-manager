@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../features/payments/pages/payment_history_page.dart';
+import '../google_calendar/google_calendar_settings_page.dart';
+
 class MorePage extends StatelessWidget {
   const MorePage({super.key});
 
@@ -33,6 +36,30 @@ class MorePage extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodyLarge,
                 ),
                 const SizedBox(height: 24),
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const PaymentHistoryPage(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.payment),
+                  label: const Text('Povijest plaćanja'),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => GoogleCalendarSettingsPage(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.calendar_month),
+                  label: const Text('Google kalendar'),
+                ),
+                const SizedBox(height: 12),
                 FilledButton.tonalIcon(
                   onPressed: () async {
                     await FirebaseAuth.instance.signOut();

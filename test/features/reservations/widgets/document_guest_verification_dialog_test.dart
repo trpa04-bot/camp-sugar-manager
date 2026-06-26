@@ -28,7 +28,12 @@ void main() {
       parsed: DocumentOcrParsedData(
         firstName: 'Ana',
         lastName: 'Horvat',
+        dateOfBirth: '1990-01-02',
         documentNumber: 'L628C54X8',
+        documentExpiryDate: '2030-05-06',
+        nationality: 'HRV',
+        issuingCountry: 'HRV',
+        gender: 'F',
         documentKind: 'nationalIdCard',
       ),
     );
@@ -218,6 +223,80 @@ void main() {
     expect(replacedId, 'front');
     expect(find.text('Prednja strana'), findsOneWidget);
     expect(find.text('Stražnja strana'), findsOneWidget);
+  });
+
+  testWidgets('review pre-fills OCR fields and allows manual edit', (
+    tester,
+  ) async {
+    final front = image('front', DocumentSide.frontIdCard, 's/front.jpg');
+    await pumpDialog(
+      tester,
+      images: [front],
+      onReprocess: () async => DocumentVerificationDialogPayload(
+        images: [front],
+        imagePreviews: previews([front]),
+        ocrResult: ocrResult(),
+        processStatus: 'review',
+      ),
+      onAddMorePhotos: () async => null,
+      onReplacePhoto: (image, onProgress) async {
+        return DocumentVerificationDialogPayload(
+          images: [front],
+          imagePreviews: previews([front]),
+          ocrResult: ocrResult(),
+          processStatus: 'review',
+        );
+      },
+      onRemovePhoto: (image, onProgress) async {
+        return DocumentVerificationDialogPayload(
+          images: [front],
+          imagePreviews: previews([front]),
+          ocrResult: ocrResult(),
+          processStatus: 'review',
+        );
+      },
+      onSave:
+          (
+            guestArg,
+            cleanupPolicyArg,
+            statusArg,
+            manualArg,
+            duplicateArg,
+          ) async {},
+    );
+
+    final textFields = find.byType(TextFormField);
+    final firstNameField = textFields.at(0);
+    final lastNameField = textFields.at(1);
+    final nationalityField = textFields.at(2);
+    final issuingCountryField = textFields.at(3);
+    final documentNumberField = textFields.at(5);
+    final genderField = textFields.at(6);
+
+    expect(firstNameField, findsOneWidget);
+    expect(lastNameField, findsOneWidget);
+    expect(documentNumberField, findsOneWidget);
+    expect(nationalityField, findsOneWidget);
+    expect(issuingCountryField, findsOneWidget);
+    expect(genderField, findsOneWidget);
+
+    expect(find.text('Ana'), findsWidgets);
+    expect(find.text('Horvat'), findsWidgets);
+    expect(find.text('L628C54X8'), findsWidgets);
+    expect(find.text('Hrvatska (HRV)'), findsOneWidget);
+    expect(find.text('HRV'), findsOneWidget);
+    expect(find.text('F'), findsWidgets);
+    expect(find.text('02.01.1990'), findsOneWidget);
+    expect(find.text('06.05.2030'), findsOneWidget);
+
+    await tester.enterText(firstNameField, 'Željko');
+    await tester.enterText(lastNameField, 'Šimić');
+    await tester.enterText(issuingCountryField, 'DEU');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Željko'), findsOneWidget);
+    expect(find.text('Šimić'), findsOneWidget);
+    expect(find.text('DEU'), findsOneWidget);
   });
 
   testWidgets('replace callback for back side is separate action', (

@@ -11,9 +11,22 @@ import '../models/reservation.dart';
 import '../models/reservation_document_scan_context.dart';
 import '../models/reservation_guest.dart';
 import '../services/document_ocr_cloud_service.dart';
+import '../services/document_image_source_adapter.dart';
+import '../services/document_image_quality_service.dart';
+import '../services/document_scan_quality_message_resolver.dart';
 import '../services/document_scan_service.dart';
 import '../services/reservation_service.dart';
+import '../services/web_camera_capture_adapter.dart';
 import 'document_guest_verification_dialog.dart';
+import 'web_document_camera_capture_dialog.dart';
+
+typedef DocumentScanImagePicker = Future<XFile?> Function(DocumentSide side);
+typedef DocumentScanProcessOverride = Future<void> Function();
+typedef DocumentScanWebCameraDialogOpener =
+    Future<XFile?> Function(
+      BuildContext context,
+      WebCameraCaptureAdapter cameraAdapter,
+    );
 
 enum DocumentScanProcessStatus {
   selectingImages,
@@ -80,6 +93,7 @@ Future<void> showReservationDocumentScanFlow(
   BuildContext context, {
   required Reservation reservation,
   required ReservationService reservationService,
+  ReservationGuest? initialGuest,
 }) async {
   await showModalBottomSheet<void>(
     context: context,
@@ -92,6 +106,7 @@ Future<void> showReservationDocumentScanFlow(
         child: ReservationDocumentScanSheet(
           reservation: reservation,
           reservationService: reservationService,
+          initialGuest: initialGuest,
         ),
       );
     },
@@ -103,10 +118,32 @@ class ReservationDocumentScanSheet extends StatefulWidget {
     super.key,
     required this.reservation,
     required this.reservationService,
+    this.initialGuest,
+    this.documentScanService,
+    this.documentOcrCloudService,
+    this.qualityService,
+    this.qualityMessageResolver,
+    this.imagePickerOverride,
+    this.processDocumentsOverride,
+    this.imageSourceAdapter,
+    this.webCameraAdapter,
+    this.webCameraDialogOpener,
+    this.isWebOverride,
   });
 
   final Reservation reservation;
   final ReservationService reservationService;
+  final ReservationGuest? initialGuest;
+  final DocumentScanService? documentScanService;
+  final DocumentOcrCloudService? documentOcrCloudService;
+  final DocumentImageQualityService? qualityService;
+  final DocumentScanQualityMessageResolver? qualityMessageResolver;
+  final DocumentScanImagePicker? imagePickerOverride;
+  final DocumentScanProcessOverride? processDocumentsOverride;
+  final DocumentImageSourceAdapter? imageSourceAdapter;
+  final WebCameraCaptureAdapter? webCameraAdapter;
+  final DocumentScanWebCameraDialogOpener? webCameraDialogOpener;
+  final bool? isWebOverride;
 
   @override
   State<ReservationDocumentScanSheet> createState() =>
@@ -115,9 +152,12 @@ class ReservationDocumentScanSheet extends StatefulWidget {
 
 class _ReservationDocumentScanSheetState
     extends State<ReservationDocumentScanSheet> {
-  final DocumentScanService _documentScanService = DocumentScanService();
-  final DocumentOcrCloudService _documentOcrCloudService =
-      DocumentOcrCloudService();
+  DocumentScanService? _documentScanService;
+  DocumentOcrCloudService? _documentOcrCloudService;
+  DocumentImageSourceAdapter? _imageSourceAdapter;
+  WebCameraCaptureAdapter? _webCameraAdapter;
+  late final DocumentImageQualityService _qualityService;
+  late final DocumentScanQualityMessageResolver _qualityMessageResolver;
   final Uuid _uuid = const Uuid();
 
   final List<_SelectedDocumentImage> _images = <_SelectedDocumentImage>[];
@@ -126,6 +166,54 @@ class _ReservationDocumentScanSheetState
   String? _errorMessage;
   String _progressText = '';
   DocumentScanProcessStatus _status = DocumentScanProcessStatus.selectingImages;
+
+  @override
+  void initState() {
+    super.initState();
+    _documentScanService = widget.documentScanService;
+    _documentOcrCloudService = widget.documentOcrCloudService;
+    _imageSourceAdapter = widget.imageSourceAdapter;
+    _webCameraAdapter = widget.webCameraAdapter;
+    _qualityService =
+        widget.qualityService ?? const DocumentImageQualityService();
+    _qualityMessageResolver =
+        widget.qualityMessageResolver ??
+        const DocumentScanQualityMessageResolver();
+  }
+
+  DocumentScanService get _scanService {
+    return _documentScanService ??= DocumentScanService();
+  }
+
+  DocumentOcrCloudService get _ocrService {
+    return _documentOcrCloudService ??= DocumentOcrCloudService();
+  }
+
+  DocumentImageSourceAdapter get _imageSource {
+    return _imageSourceAdapter ??= createDocumentImageSourceAdapter();
+  }
+
+  WebCameraCaptureAdapter get _cameraAdapter {
+    return _webCameraAdapter ??= createWebCameraCaptureAdapter();
+  }
+
+  DocumentScanWebCameraDialogOpener get _openWebCameraDialog {
+    return widget.webCameraDialogOpener ??
+        ((context, cameraAdapter) {
+          return showWebDocumentCameraCaptureDialog(
+            context,
+            adapter: cameraAdapter,
+          );
+        });
+  }
+
+  bool get _isWeb => widget.isWebOverride ?? kIsWeb;
+
+  @override
+  void dispose() {
+    _webCameraAdapter?.dispose();
+    super.dispose();
+  }
 
   String get _statusDisplayLabel {
     switch (_status) {
@@ -157,7 +245,11 @@ class _ReservationDocumentScanSheetState
     );
   }
 
-  Future<void> _addImage(DocumentSide side, {String? replaceId}) async {
+  Future<void> _addImage(
+    DocumentSide side, {
+    String? replaceId,
+    DocumentImageSourceKind? forcedSource,
+  }) async {
     if (_images.length >= 5 && replaceId == null) {
       setState(() {
         _errorMessage = 'Maksimalno je dopušteno 5 fotografija po gostu.';
@@ -165,27 +257,109 @@ class _ReservationDocumentScanSheetState
       return;
     }
 
-    final selected = await _documentScanService.pickGalleryImage();
+    final selected = await _pickImageForSide(side, forcedSource: forcedSource);
     if (selected == null) {
-      return;
-    }
-
-    if (!_documentScanService.isSupportedImageFile(selected)) {
+      debugPrint('[doc-flow] stage=file-pick code=no-file-selected');
       setState(() {
-        _errorMessage = 'Podržani su samo JPG, JPEG i PNG formati.';
+        _errorMessage = 'Nije odabrana datoteka.';
       });
       return;
     }
 
-    final bytes = await selected.readAsBytes();
+    debugPrint('[doc-flow] file selected: true');
+    debugPrint('[doc-flow] mime type: ${selected.mimeType ?? '(empty)'}');
+
+    final lowerName = selected.name.toLowerCase();
+    final mimeType = (selected.mimeType ?? '').toLowerCase();
+    final isPdf = lowerName.endsWith('.pdf') || mimeType == 'application/pdf';
+    if (isPdf) {
+      setState(() {
+        _errorMessage =
+            'PDF dokument je odabran. OCR obrada trenutno podržava samo slike (JPG, JPEG, PNG).';
+      });
+      return;
+    }
+
+    final supported = widget.documentScanService != null
+        ? widget.documentScanService!.isSupportedImageFile(selected)
+        : (widget.imagePickerOverride != null
+              ? true
+              : _isSupportedImage(selected));
+    if (!supported) {
+      debugPrint('[doc-flow] stage=file-pick code=unsupported-format');
+      setState(() {
+        _errorMessage = 'Nepodržan format.';
+      });
+      return;
+    }
+
+    Uint8List bytes;
+    try {
+      bytes = await selected.readAsBytes();
+    } catch (_) {
+      debugPrint('[doc-flow] stage=file-read code=read-failed');
+      setState(() {
+        _errorMessage = 'Datoteka se ne može pročitati.';
+      });
+      return;
+    }
+    debugPrint('[doc-flow] byte length: ${bytes.lengthInBytes}');
+    if (bytes.isEmpty) {
+      debugPrint('[doc-flow] stage=file-read code=empty-image');
+      setState(() {
+        _errorMessage = 'Slika je prazna.';
+      });
+      return;
+    }
+
+    debugPrint('[doc-flow] quality check started');
+    final qualityReport = await _qualityService.analyze(bytes);
+    final isHeicLike =
+        mimeType.contains('heic') ||
+        mimeType.contains('heif') ||
+        lowerName.endsWith('.heic') ||
+        lowerName.endsWith('.heif');
+
+    final blockingIssues = qualityReport.issues
+        .where((issue) => issue.blocking)
+        .toList(growable: false);
+    final decodeOnlyBlocking =
+        blockingIssues.isNotEmpty &&
+        blockingIssues.every((issue) => issue.code == 'decodeFailed');
+
+    if (qualityReport.hasBlockingIssues &&
+        !(isHeicLike && decodeOnlyBlocking)) {
+      final messages = _qualityMessageResolver.resolveMessages(blockingIssues);
+      debugPrint('[doc-flow] quality check failure');
+      setState(() {
+        _errorMessage =
+            'Provjera kvalitete nije uspjela. ${messages.join(' ')}';
+      });
+      return;
+    }
+    debugPrint('[doc-flow] quality check success');
+
     final imageId = replaceId ?? _uuid.v4();
+    final nonBlockingIssues = qualityReport.issues
+        .where((issue) => !issue.blocking)
+        .toList(growable: false);
+    final warningMessages = _qualityMessageResolver.resolveMessages(
+      nonBlockingIssues,
+    );
+    final qualityWarningText = warningMessages.isEmpty
+        ? null
+        : warningMessages.take(2).join('\n');
     final documentImage = _SelectedDocumentImage(
       id: imageId,
       file: selected,
       bytes: bytes,
+      mimeType: mimeType,
       side: side,
       uploadStatus: DocumentImageUploadStatus.pending,
       ocrStatus: DocumentImageOcrStatus.pending,
+      qualityWarningText: (isHeicLike && decodeOnlyBlocking)
+          ? 'Fotografija odabrana. Lokalni preview nije dostupan, obrada se nastavlja.'
+          : qualityWarningText,
     );
 
     setState(() {
@@ -218,40 +392,124 @@ class _ReservationDocumentScanSheetState
   }
 
   Future<XFile?> _pickImageForPlatform() async {
-    if (kIsWeb) {
-      return _documentScanService.pickGalleryImage();
+    return _pickImageForSide(DocumentSide.additional);
+  }
+
+  bool _isSupportedImage(XFile file) {
+    final lowerName = file.name.toLowerCase();
+    final mimeType = (file.mimeType ?? '').toLowerCase();
+    return lowerName.endsWith('.jpg') ||
+        lowerName.endsWith('.jpeg') ||
+        lowerName.endsWith('.png') ||
+        lowerName.endsWith('.heic') ||
+        lowerName.endsWith('.heif') ||
+        mimeType == 'image/jpeg' ||
+        mimeType == 'image/jpg' ||
+        mimeType == 'image/png' ||
+        mimeType == 'image/heic' ||
+        mimeType == 'image/heif';
+  }
+
+  Future<XFile?> _pickImageForSide(
+    DocumentSide side, {
+    DocumentImageSourceKind? forcedSource,
+  }) async {
+    if (widget.imagePickerOverride != null) {
+      return widget.imagePickerOverride!(side);
     }
 
-    final source = await showModalBottomSheet<ImageSource>(
+    final source = forcedSource ?? await _showDocumentSourcePicker();
+    if (source == null) {
+      return null;
+    }
+    if (!mounted) {
+      return null;
+    }
+
+    try {
+      debugPrint('[doc-flow] picker opened');
+      switch (source) {
+        case DocumentImageSourceKind.scan:
+          if (_isWeb) {
+            if (_imageSource.isMobileWeb) {
+              return _imageSource.captureFromMobileCamera();
+            }
+            if (_imageSource.supportsWebCamera) {
+              return _openWebCameraDialog(context, _cameraAdapter);
+            }
+            throw const WebCameraException(
+              WebCameraErrorCode.unsupported,
+              'Skeniranje kamerom nije podržano u ovom pregledniku. Odaberite fotografiju.',
+            );
+          }
+          return _scanService.pickCameraImage();
+        case DocumentImageSourceKind.gallery:
+          if (_isWeb) {
+            return _imageSource.pickFromGallery();
+          }
+          return _scanService.pickGalleryImage();
+        case DocumentImageSourceKind.file:
+          if (_isWeb) {
+            return _imageSource.pickFromFile();
+          }
+          return _scanService.pickGalleryImage();
+      }
+    } on WebCameraException catch (error) {
+      debugPrint('[doc-flow] stage=file-pick code=${error.code.name}');
+      if (mounted) {
+        setState(() {
+          _errorMessage = error.message;
+        });
+      }
+      return null;
+    } catch (error) {
+      debugPrint('[doc-flow] stage=file-pick code=picker-failed');
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Datoteka se ne može pročitati.';
+        });
+      }
+      return null;
+    }
+  }
+
+  Future<DocumentImageSourceKind?> _showDocumentSourcePicker() async {
+    return showModalBottomSheet<DocumentImageSourceKind>(
       context: context,
       builder: (context) {
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              const ListTile(
+                title: Text(
+                  'Dokument gosta',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.document_scanner_outlined),
+                title: const Text('Skeniraj dokument'),
+                onTap: () =>
+                    Navigator.of(context).pop(DocumentImageSourceKind.scan),
+              ),
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
                 title: const Text('Odaberi iz galerije'),
-                onTap: () => Navigator.of(context).pop(ImageSource.gallery),
+                onTap: () =>
+                    Navigator.of(context).pop(DocumentImageSourceKind.gallery),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_camera_outlined),
-                title: const Text('Snimi kamerom'),
-                onTap: () => Navigator.of(context).pop(ImageSource.camera),
+                leading: const Icon(Icons.insert_drive_file_outlined),
+                title: const Text('Dodaj PDF ili sliku'),
+                onTap: () =>
+                    Navigator.of(context).pop(DocumentImageSourceKind.file),
               ),
             ],
           ),
         );
       },
     );
-
-    if (source == null) {
-      return null;
-    }
-    if (source == ImageSource.camera) {
-      return _documentScanService.pickCameraImage();
-    }
-    return _documentScanService.pickGalleryImage();
   }
 
   Future<DocumentVerificationDialogPayload> _recomputeMergedOcr({
@@ -286,7 +544,7 @@ class _ReservationDocumentScanSheetState
     }
     await user.getIdToken(true);
 
-    final ocrResult = await _documentOcrCloudService.processDocuments(
+    final ocrResult = await _ocrService.processDocuments(
       reservationId: scanContext.reservationId,
       guestId: scanContext.guestId,
       images: images,
@@ -338,6 +596,11 @@ class _ReservationDocumentScanSheetState
       return;
     }
 
+    if (widget.processDocumentsOverride != null) {
+      await widget.processDocumentsOverride!();
+      return;
+    }
+
     setState(() {
       _isBusy = true;
       _errorMessage = null;
@@ -346,7 +609,8 @@ class _ReservationDocumentScanSheetState
     });
 
     try {
-      final guestId = _uuid.v4();
+      final initialGuestId = widget.initialGuest?.id.trim() ?? '';
+      final guestId = initialGuestId.isEmpty ? _uuid.v4() : initialGuestId;
       final scanContext = _scanContext(guestId);
       final uploadedImages = <DocumentImage>[];
       final previewMap = <String, Uint8List>{};
@@ -360,7 +624,7 @@ class _ReservationDocumentScanSheetState
           uploadStatus: DocumentImageUploadStatus.uploading,
         );
 
-        final uploadResult = await _documentScanService.uploadDocumentImage(
+        final uploadResult = await _scanService.uploadDocumentImage(
           reservation: scanContext,
           guestId: guestId,
           documentImageId: image.id,
@@ -405,11 +669,13 @@ class _ReservationDocumentScanSheetState
       }
       await user.getIdToken(true);
 
-      final ocrResult = await _documentOcrCloudService.processDocuments(
+      debugPrint('[doc-flow] OCR call started');
+      final ocrResult = await _ocrService.processDocuments(
         reservationId: scanContext.reservationId,
         guestId: guestId,
         images: uploadedImages,
       );
+      debugPrint('[doc-flow] OCR call success');
 
       for (var i = 0; i < uploadedImages.length; i++) {
         setState(() {
@@ -498,13 +764,13 @@ class _ReservationDocumentScanSheetState
           if (pickedFile == null) {
             return null;
           }
-          if (!_documentScanService.isSupportedImageFile(pickedFile)) {
-            throw StateError('Podržani su samo JPG, JPEG i PNG formati.');
+          if (!_isSupportedImage(pickedFile)) {
+            throw StateError('Nepodržan format.');
           }
 
           final bytes = await pickedFile.readAsBytes();
           final imageId = _uuid.v4();
-          final uploadResult = await _documentScanService.uploadDocumentImage(
+          final uploadResult = await _scanService.uploadDocumentImage(
             reservation: scanContext,
             guestId: scanContext.guestId,
             documentImageId: imageId,
@@ -550,12 +816,12 @@ class _ReservationDocumentScanSheetState
               processStatus: dialogProcessStatus,
             );
           }
-          if (!_documentScanService.isSupportedImageFile(pickedFile)) {
+          if (!_isSupportedImage(pickedFile)) {
             onProgress(
               DocumentPhotoOperationState.error,
-              errorMessage: 'Podržani su samo JPG, JPEG i PNG formati.',
+              errorMessage: 'Nepodržan format.',
             );
-            throw StateError('Podržani su samo JPG, JPEG i PNG formati.');
+            throw StateError('Nepodržan format.');
           }
 
           final bytes = await pickedFile.readAsBytes();
@@ -564,7 +830,7 @@ class _ReservationDocumentScanSheetState
           var newDocSaved = false;
 
           try {
-            final uploadResult = await _documentScanService.uploadDocumentImage(
+            final uploadResult = await _scanService.uploadDocumentImage(
               reservation: scanContext,
               guestId: scanContext.guestId,
               documentImageId: newImageId,
@@ -594,7 +860,7 @@ class _ReservationDocumentScanSheetState
             );
             newDocSaved = true;
 
-            await _documentScanService.deleteDocumentImage(image.storagePath);
+            await _scanService.deleteDocumentImage(image.storagePath);
             await widget.reservationService.deleteGuestDocumentImage(
               scanContext.reservationId,
               scanContext.guestId,
@@ -623,9 +889,7 @@ class _ReservationDocumentScanSheetState
             }
             if (uploadedStoragePath != null && uploadedStoragePath.isNotEmpty) {
               try {
-                await _documentScanService.deleteDocumentImage(
-                  uploadedStoragePath,
-                );
+                await _scanService.deleteDocumentImage(uploadedStoragePath);
               } catch (_) {}
             }
             onProgress(
@@ -638,7 +902,7 @@ class _ReservationDocumentScanSheetState
         onRemovePhoto: (image, onProgress) async {
           onProgress(DocumentPhotoOperationState.removing);
           try {
-            await _documentScanService.deleteDocumentImage(image.storagePath);
+            await _scanService.deleteDocumentImage(image.storagePath);
             await widget.reservationService.deleteGuestDocumentImage(
               scanContext.reservationId,
               scanContext.guestId,
@@ -768,7 +1032,7 @@ class _ReservationDocumentScanSheetState
                   reservationId: widget.reservation.id,
                   guest: saveResult.guest,
                   images: dialogImages,
-                  deleteDocumentImage: _documentScanService.deleteDocumentImage,
+                  deleteDocumentImage: _scanService.deleteDocumentImage,
                 );
 
                 if (cleanupResult.cleanupFailed) {
@@ -801,14 +1065,28 @@ class _ReservationDocumentScanSheetState
       });
       Navigator.of(context).pop();
     } on FirebaseFunctionsException catch (error) {
+      debugPrint('[doc-flow] OCR call failure code=${error.code}');
       setState(() {
-        _errorMessage =
-            'OCR nije uspio (${error.code}): ${error.message ?? 'Nepoznata greška.'}';
+        _errorMessage = 'OCR nije uspio.';
         _status = DocumentScanProcessStatus.failed;
       });
     } catch (error) {
+      debugPrint('[doc-flow] stage=process code=unknown-failure');
       setState(() {
-        _errorMessage = 'Obrada dokumenata nije uspjela: $error';
+        final message = error.toString().toLowerCase();
+        if (message.contains('praz')) {
+          _errorMessage = 'Slika je prazna.';
+        } else if (message.contains('podrž') || message.contains('format')) {
+          _errorMessage = 'Nepodržan format.';
+        } else if (message.contains('upload')) {
+          _errorMessage = 'Upload nije uspio.';
+        } else if (message.contains('ocr')) {
+          _errorMessage = 'OCR nije uspio.';
+        } else if (message.contains('quality')) {
+          _errorMessage = 'Provjera kvalitete nije uspjela.';
+        } else {
+          _errorMessage = 'Datoteka se ne može pročitati.';
+        }
         _status = DocumentScanProcessStatus.failed;
       });
     } finally {
@@ -841,6 +1119,21 @@ class _ReservationDocumentScanSheetState
   }
 
   Widget _buildImageCard(_SelectedDocumentImage image) {
+    final canRenderInline =
+        image.mimeType.contains('jpeg') ||
+        image.mimeType.contains('jpg') ||
+        image.mimeType.contains('png');
+
+    final previewWidget = canRenderInline
+        ? Image.memory(image.bytes, width: 72, height: 72, fit: BoxFit.cover)
+        : Container(
+            width: 72,
+            height: 72,
+            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+            alignment: Alignment.center,
+            child: const Icon(Icons.image_not_supported_outlined),
+          );
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: Padding(
@@ -849,12 +1142,7 @@ class _ReservationDocumentScanSheetState
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.memory(
-                image.bytes,
-                width: 72,
-                height: 72,
-                fit: BoxFit.cover,
-              ),
+              child: previewWidget,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -872,6 +1160,13 @@ class _ReservationDocumentScanSheetState
                     'Upload: ${image.uploadStatus.name} • OCR: ${image.ocrStatus.name}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  if (image.qualityWarningText != null)
+                    Text(
+                      image.qualityWarningText!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -897,8 +1192,7 @@ class _ReservationDocumentScanSheetState
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: ListView(
         children: [
           Text(
             'Skeniraj dokumente gosta',
@@ -908,12 +1202,48 @@ class _ReservationDocumentScanSheetState
           ),
           const SizedBox(height: 8),
           const Text(
-            'Dodaj prednju i stražnju stranu osobne iskaznice ili dodatne fotografije. Maksimalno 5 fotografija.',
+            'Dodaj prednju i stražnju stranu osobne iskaznice, putovnicu ili dodatne fotografije. Maksimalno 5 fotografija.',
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Dokument gosta',
+            style: TextStyle(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
-          Text('Status: $_statusDisplayLabel'),
-          if (_progressText.isNotEmpty) Text(_progressText),
-          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _isBusy
+                    ? null
+                    : () => _addImage(DocumentSide.additional),
+                icon: const Icon(Icons.document_scanner_outlined),
+                label: const Text('Skeniraj dokument'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _isBusy
+                    ? null
+                    : () => _addImage(
+                        DocumentSide.additional,
+                        forcedSource: DocumentImageSourceKind.gallery,
+                      ),
+                icon: const Icon(Icons.photo_library_outlined),
+                label: const Text('Odaberi iz galerije'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _isBusy
+                    ? null
+                    : () => _addImage(
+                        DocumentSide.additional,
+                        forcedSource: DocumentImageSourceKind.file,
+                      ),
+                icon: const Icon(Icons.insert_drive_file_outlined),
+                label: const Text('Dodaj PDF ili sliku'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -935,6 +1265,13 @@ class _ReservationDocumentScanSheetState
               OutlinedButton.icon(
                 onPressed: _isBusy
                     ? null
+                    : () => _addImage(DocumentSide.passport),
+                icon: const Icon(Icons.travel_explore),
+                label: const Text('Dodaj putovnicu'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _isBusy
+                    ? null
                     : () => _addImage(DocumentSide.additional),
                 icon: const Icon(Icons.add_photo_alternate_outlined),
                 label: const Text('Dodaj dodatnu fotografiju'),
@@ -942,8 +1279,12 @@ class _ReservationDocumentScanSheetState
             ],
           ),
           const SizedBox(height: 8),
+          Text('Status: $_statusDisplayLabel'),
+          if (_progressText.isNotEmpty) Text(_progressText),
+          const SizedBox(height: 8),
           if (_images.isNotEmpty)
-            Expanded(
+            SizedBox(
+              height: 260,
               child: ListView.builder(
                 itemCount: _images.length,
                 itemBuilder: (context, index) =>
@@ -951,12 +1292,13 @@ class _ReservationDocumentScanSheetState
               ),
             )
           else
-            const Expanded(
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(child: Text('Nema dodanih fotografija.')),
             ),
           const SizedBox(height: 8),
           FilledButton.icon(
-            onPressed: _isBusy ? null : _processDocuments,
+            onPressed: _isBusy || _images.isEmpty ? null : _processDocuments,
             icon: const Icon(Icons.settings_suggest_outlined),
             label: const Text('Obradi dokumente'),
           ),
@@ -990,33 +1332,41 @@ class _SelectedDocumentImage {
     required this.id,
     required this.file,
     required this.bytes,
+    required this.mimeType,
     required this.side,
     required this.uploadStatus,
     required this.ocrStatus,
+    this.qualityWarningText,
   });
 
   final String id;
   final XFile file;
   final Uint8List bytes;
+  final String mimeType;
   final DocumentSide side;
   final DocumentImageUploadStatus uploadStatus;
   final DocumentImageOcrStatus ocrStatus;
+  final String? qualityWarningText;
 
   _SelectedDocumentImage copyWith({
     String? id,
     XFile? file,
     Uint8List? bytes,
+    String? mimeType,
     DocumentSide? side,
     DocumentImageUploadStatus? uploadStatus,
     DocumentImageOcrStatus? ocrStatus,
+    String? qualityWarningText,
   }) {
     return _SelectedDocumentImage(
       id: id ?? this.id,
       file: file ?? this.file,
       bytes: bytes ?? this.bytes,
+      mimeType: mimeType ?? this.mimeType,
       side: side ?? this.side,
       uploadStatus: uploadStatus ?? this.uploadStatus,
       ocrStatus: ocrStatus ?? this.ocrStatus,
+      qualityWarningText: qualityWarningText ?? this.qualityWarningText,
     );
   }
 }

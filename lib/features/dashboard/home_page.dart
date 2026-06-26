@@ -15,33 +15,59 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _currentIndex = 0;
+  bool _openReservationsWithDebt = false;
 
   static const _titles = ['Početna', 'Rezervacije', 'Parcele', 'Gosti', 'Više'];
 
   void _openReservations() {
     setState(() {
+      _openReservationsWithDebt = false;
       _currentIndex = 1;
     });
+  }
+
+  void _openReservationsWithDebtFilter() {
+    setState(() {
+      _openReservationsWithDebt = true;
+      _currentIndex = 1;
+    });
+  }
+
+  Widget _buildCurrentPage() {
+    switch (_currentIndex) {
+      case 0:
+        return DashboardPage(
+          onNewReservation: _openReservations,
+          onOpenDebtReservations: _openReservationsWithDebtFilter,
+        );
+      case 1:
+        return ReservationsPage(initialDebtOnly: _openReservationsWithDebt);
+      case 2:
+        return const ParcelsPage();
+      case 3:
+        return GuestsPage();
+      case 4:
+        return const MorePage();
+      default:
+        return DashboardPage(
+          onNewReservation: _openReservations,
+          onOpenDebtReservations: _openReservationsWithDebtFilter,
+        );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(_titles[_currentIndex])),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          DashboardPage(onNewReservation: _openReservations),
-          const ReservationsPage(),
-          const ParcelsPage(),
-          GuestsPage(),
-          const MorePage(),
-        ],
-      ),
+      body: _buildCurrentPage(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
           setState(() {
+            if (index == 1) {
+              _openReservationsWithDebt = false;
+            }
             _currentIndex = index;
           });
         },

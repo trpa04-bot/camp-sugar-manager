@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function pathMatchesReservationDocument(reservationId, guestId) {
+      return reservationId is string
+        && reservationId.size() > 0
+        && guestId is string
+        && guestId.size() > 0;
+    }
+
+    match /reservations/{reservationId}/documents/{guestId}/{fileName} {
+      allow read, write, delete: if signedIn() && pathMatchesReservationDocument(reservationId, guestId);
+    }
+
+    match /reservations/{reservationId}/vehicle/{fileName} {
+      allow read, write, delete: if signedIn() && reservationId is string && reservationId.size() > 0;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

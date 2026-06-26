@@ -43,6 +43,18 @@ void main() {
         .collection('reservations')
         .doc('res-1')
         .set(reservation.toMap());
+    await firestore.collection('pitches').doc('pitch-1').set({
+      'id': 'pitch-1',
+      'name': 'Parcela 1',
+      'number': 1,
+      'zone': 'A',
+      'status': 'occupied',
+      'maxGuests': 4,
+      'currentGuests': 1,
+      'hasElectricity': true,
+      'hasWater': true,
+      'notes': '',
+    });
     await firestore
         .collection('reservations')
         .doc('res-1')
@@ -81,6 +93,8 @@ void main() {
         home: Scaffold(body: GuestsPage(reservationService: service)),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Gosti'));
     await tester.pumpAndSettle();
 
     expect(find.text('Ana Horvat'), findsOneWidget);
@@ -126,6 +140,18 @@ void main() {
         .collection('reservations')
         .doc('res-1')
         .set(reservation.toMap());
+    await firestore.collection('pitches').doc('pitch-1').set({
+      'id': 'pitch-1',
+      'name': 'Parcela 1',
+      'number': 1,
+      'zone': 'A',
+      'status': 'available',
+      'maxGuests': 4,
+      'currentGuests': 0,
+      'hasElectricity': true,
+      'hasWater': true,
+      'notes': '',
+    });
     await firestore
         .collection('reservations')
         .doc('res-1')
@@ -163,6 +189,8 @@ void main() {
         home: Scaffold(body: GuestsPage(reservationService: service)),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Gosti'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Status: Čeka prijavu'), findsOneWidget);
@@ -206,6 +234,18 @@ void main() {
         .collection('reservations')
         .doc('res-1')
         .set(reservation.toMap());
+    await firestore.collection('pitches').doc('pitch-1').set({
+      'id': 'pitch-1',
+      'name': 'Parcela 1',
+      'number': 1,
+      'zone': 'A',
+      'status': 'occupied',
+      'maxGuests': 4,
+      'currentGuests': 1,
+      'hasElectricity': true,
+      'hasWater': true,
+      'notes': '',
+    });
     await firestore
         .collection('reservations')
         .doc('res-1')
@@ -243,6 +283,8 @@ void main() {
         home: Scaffold(body: GuestsPage(reservationService: service)),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Gosti'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Status: Trenutno u kampu'), findsOneWidget);

@@ -59,7 +59,6 @@ class _PitchFormDialogState extends State<PitchFormDialog> {
   late final TextEditingController _numberController;
   late final TextEditingController _zoneController;
   late final TextEditingController _maxGuestsController;
-  late final TextEditingController _currentGuestsController;
   late final TextEditingController _notesController;
 
   late PitchStatus _status;
@@ -82,9 +81,6 @@ class _PitchFormDialogState extends State<PitchFormDialog> {
     _maxGuestsController = TextEditingController(
       text: pitch.maxGuests.toString(),
     );
-    _currentGuestsController = TextEditingController(
-      text: pitch.currentGuests.toString(),
-    );
     _notesController = TextEditingController(text: pitch.notes);
     _status = pitch.status;
     _hasElectricity = pitch.hasElectricity;
@@ -97,7 +93,6 @@ class _PitchFormDialogState extends State<PitchFormDialog> {
     _numberController.dispose();
     _zoneController.dispose();
     _maxGuestsController.dispose();
-    _currentGuestsController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -120,8 +115,12 @@ class _PitchFormDialogState extends State<PitchFormDialog> {
       zone: _zoneController.text.trim(),
       status: _status,
       maxGuests: int.parse(_maxGuestsController.text.trim()),
-      currentGuests: int.parse(_currentGuestsController.text.trim()),
-      currentGuestCount: int.parse(_currentGuestsController.text.trim()),
+      currentGuests: widget.pitch?.currentGuests ?? 0,
+      currentGuestCount: widget.pitch?.currentGuestCount ?? 0,
+      currentReservationId: widget.pitch?.currentReservationId,
+      currentPrimaryGuestName: widget.pitch?.currentPrimaryGuestName,
+      occupiedFrom: widget.pitch?.occupiedFrom,
+      occupiedUntil: widget.pitch?.occupiedUntil,
       hasElectricity: _hasElectricity,
       hasWater: _hasWater,
       notes: _notesController.text.trim(),
@@ -228,29 +227,49 @@ class _PitchFormDialogState extends State<PitchFormDialog> {
               textInputAction: TextInputAction.next,
             ),
             const SizedBox(height: 14),
-            DropdownButtonFormField<PitchStatus>(
-              initialValue: _status,
-              decoration: const InputDecoration(
-                labelText: 'Status',
-                prefixIcon: Icon(Icons.toggle_on_outlined),
+            // 'occupied' and 'reserved' are managed automatically via
+            // reservation check-in / check-out — not settable manually.
+            if (_status == PitchStatus.occupied ||
+                _status == PitchStatus.reserved)
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Status',
+                  prefixIcon: Icon(Icons.toggle_on_outlined),
+                ),
+                child: Text(
+                  _status.displayLabel,
+                  style: const TextStyle(fontSize: 16),
+                ),
+              )
+            else
+              DropdownButtonFormField<PitchStatus>(
+                initialValue: _status,
+                decoration: const InputDecoration(
+                  labelText: 'Status',
+                  prefixIcon: Icon(Icons.toggle_on_outlined),
+                ),
+                items:
+                    const [
+                          PitchStatus.available,
+                          PitchStatus.cleaning,
+                          PitchStatus.unavailable,
+                        ]
+                        .map(
+                          (status) => DropdownMenuItem(
+                            value: status,
+                            child: Text(status.displayLabel),
+                          ),
+                        )
+                        .toList(),
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _status = value;
+                  });
+                },
               ),
-              items: PitchStatus.values
-                  .map(
-                    (status) => DropdownMenuItem(
-                      value: status,
-                      child: Text(status.displayLabel),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) {
-                  return;
-                }
-                setState(() {
-                  _status = value;
-                });
-              },
-            ),
             const SizedBox(height: 14),
             TextFormField(
               controller: _maxGuestsController,
@@ -265,24 +284,6 @@ class _PitchFormDialogState extends State<PitchFormDialog> {
                 final parsed = int.tryParse(value ?? '');
                 if (parsed == null || parsed < 1) {
                   return 'Max guests mora biti najmanje 1.';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 14),
-            TextFormField(
-              controller: _currentGuestsController,
-              decoration: const InputDecoration(
-                labelText: 'Trenutno gostiju',
-                prefixIcon: Icon(Icons.person_outline),
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              textInputAction: TextInputAction.next,
-              validator: (value) {
-                final parsed = int.tryParse(value ?? '');
-                if (parsed == null || parsed < 0) {
-                  return 'Trenutno gostiju mora biti 0 ili više.';
                 }
                 return null;
               },

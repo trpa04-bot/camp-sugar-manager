@@ -1,17 +1,33 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import 'app.dart';
 import 'firebase_options.dart';
 
+Future<FirebaseApp> _initializeFirebase() async {
+  final app = await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  if (kIsWeb) {
+    FirebaseFirestore.instance.settings = const Settings(
+      persistenceEnabled: false,
+      webExperimentalForceLongPolling: true,
+      webExperimentalAutoDetectLongPolling: false,
+    );
+  }
+
+  return app;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    final firebaseInit = Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    final firebaseInit = _initializeFirebase();
     runApp(_FirebaseBootstrapGate(firebaseInit: firebaseInit));
   } catch (error) {
     runApp(_FirebaseBootstrapError(error: error));

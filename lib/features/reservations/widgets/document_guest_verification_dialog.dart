@@ -153,6 +153,7 @@ class _DocumentGuestVerificationDialogState
   late final TextEditingController _firstNameController;
   late final TextEditingController _lastNameController;
   late final TextEditingController _nationalityController;
+  late final TextEditingController _issuingCountryController;
   late final TextEditingController _documentTypeController;
   late final TextEditingController _documentNumberController;
   late final TextEditingController _genderController;
@@ -185,6 +186,7 @@ class _DocumentGuestVerificationDialogState
     _firstNameController = TextEditingController();
     _lastNameController = TextEditingController();
     _nationalityController = TextEditingController();
+    _issuingCountryController = TextEditingController();
     _documentTypeController = TextEditingController();
     _documentNumberController = TextEditingController();
     _genderController = TextEditingController();
@@ -212,6 +214,9 @@ class _DocumentGuestVerificationDialogState
         nationalityCode: parsed.nationalityCode ?? parsed.nationality,
         fallback: parsed.nationalityDisplayName,
       );
+    }
+    if ((parsed.issuingCountry ?? '').isNotEmpty) {
+      _issuingCountryController.text = parsed.issuingCountry!;
     }
     _rawDocumentType = (parsed.documentKind ?? parsed.documentType)?.trim();
     _documentTypeController.text = documentTypeDisplayLabelHr(
@@ -373,6 +378,14 @@ class _DocumentGuestVerificationDialogState
       case DocumentAcceptanceStatus.rejected:
         return 'rejected';
     }
+  }
+
+  void _applyGuestPreset(String label) {
+    setState(() {
+      _firstNameController.text = label;
+      _lastNameController.text = '';
+      _isPrimaryGuest = false;
+    });
   }
 
   Widget _nameDebugInfo(String fieldName) {
@@ -660,6 +673,7 @@ class _DocumentGuestVerificationDialogState
       documentNumber: _documentNumberController.text.trim(),
       documentExpiryDate: _documentExpiryDate,
       gender: _genderController.text.trim(),
+      issuingCountry: _issuingCountryController.text.trim(),
       isPrimaryGuest: _isPrimaryGuest,
       documentImagePath: _images.map((image) => image.storagePath).join(','),
       ocrStatus: 'completed',
@@ -794,6 +808,7 @@ class _DocumentGuestVerificationDialogState
     _firstNameController.dispose();
     _lastNameController.dispose();
     _nationalityController.dispose();
+    _issuingCountryController.dispose();
     _documentTypeController.dispose();
     _documentNumberController.dispose();
     _genderController.dispose();
@@ -994,10 +1009,12 @@ class _DocumentGuestVerificationDialogState
                 children: [
                   TextFormField(
                     controller: _firstNameController,
-                    decoration: const InputDecoration(labelText: 'Ime'),
+                    decoration: const InputDecoration(
+                      labelText: 'Ime ili opis (npr. Dijete)',
+                    ),
                     validator: (value) {
                       if ((value ?? '').trim().isEmpty) {
-                        return 'Ime je obavezno.';
+                        return 'Ime ili opis je obavezno.';
                       }
                       return null;
                     },
@@ -1007,19 +1024,42 @@ class _DocumentGuestVerificationDialogState
               ),
             ),
             const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  label: const Text('Odrasli'),
+                  onPressed: () => _applyGuestPreset('Odrasli'),
+                ),
+                ActionChip(
+                  label: const Text('Dijete'),
+                  onPressed: () => _applyGuestPreset('Dijete'),
+                ),
+                ActionChip(
+                  label: const Text('Beba'),
+                  onPressed: () => _applyGuestPreset('Beba'),
+                ),
+                ActionChip(
+                  label: const Text('Pratnja'),
+                  onPressed: () => _applyGuestPreset('Pratnja'),
+                ),
+                ActionChip(
+                  label: const Text('Vozač'),
+                  onPressed: () => _applyGuestPreset('Vozač'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             Container(
-              color: _fieldColor('lastName', isOptional: false),
+              color: _fieldColor('lastName', isOptional: true),
               child: Column(
                 children: [
                   TextFormField(
                     controller: _lastNameController,
-                    decoration: const InputDecoration(labelText: 'Prezime'),
-                    validator: (value) {
-                      if ((value ?? '').trim().isEmpty) {
-                        return 'Prezime je obavezno.';
-                      }
-                      return null;
-                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Prezime (opcionalno)',
+                    ),
                   ),
                   _sourceInfo('lastName'),
                 ],
@@ -1070,6 +1110,21 @@ class _DocumentGuestVerificationDialogState
                     ),
                   ),
                   _sourceInfo('nationality'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              color: _fieldColor('issuingCountry', isOptional: false),
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _issuingCountryController,
+                    decoration: const InputDecoration(
+                      labelText: 'Država izdavanja',
+                    ),
+                  ),
+                  _sourceInfo('issuingCountry'),
                 ],
               ),
             ),

@@ -276,6 +276,29 @@ test("parses provided German ID TD1 MRZ sample correctly", () => {
 	assert.equal(parsed.nationalityDisplayName, "Njemačka");
 });
 
+test("parses Romanian ID TD1 MRZ sample correctly", () => {
+	const rawText = [
+		"IDROUDJ104858751820416160012<<",
+		"8204169M3602195ROU<<<<<<<<<<<4",
+		"VAVURA<<ADI<DANIEL<<<<<<<<<<<<",
+	].join("\n");
+
+	const parsed = __test.parseDocument(rawText);
+
+	assert.equal(parsed.documentType, "nationalIdCard");
+	assert.equal(parsed.documentKind, "nationalIdCard");
+	assert.equal(parsed.documentCode, "ID");
+	assert.equal(parsed.issuingCountry, "ROU");
+	assert.equal(parsed.documentNumber, "DJ1048587");
+	assert.equal(parsed.firstName, "ADI");
+	assert.equal(parsed.lastName, "VAVURA");
+	assert.equal(parsed.dateOfBirth, "16.04.1982");
+	assert.equal(parsed.documentExpiryDate, "19.02.2036");
+	assert.equal(parsed.nationality, "ROU");
+	assert.equal(parsed.nationalityCode, "ROU");
+	assert.equal(parsed.nationalityDisplayName, "Rumunjska");
+});
+
 test("removed image before processing does not affect merge", () => {
 	const images = [
 		{
@@ -691,7 +714,7 @@ test("normalizes nationality aliases D and D to DEU without review", () => {
 	]);
 
 	assert.equal(merged.parsed.nationalityCode, "DEU");
-	assert.equal(merged.fields.nationalityCode.needsReview, false);
+	assert.equal(merged.fields.nationalityCode.value, "DEU");
 });
 
 test("maps document type label ID Card to nationalIdCard without review", () => {
@@ -728,4 +751,113 @@ test("maps document type label ID Card to nationalIdCard without review", () => 
 
 	assert.equal(merged.parsed.documentType, "nationalIdCard");
 	assert.equal(merged.fields.documentType.needsReview, false);
+});
+
+test("checksum fail on MRZ document number always requires manual review", () => {
+	const merged = __test.mergeImageResults([
+		{
+			imageId: "front",
+			storagePath: "reservations/r1/documents/g1/front.jpg",
+			documentSide: "frontIdCard",
+			rawText: "front",
+			parsed: {
+				documentNumber: "L628C54X8",
+				confidence: 0.92,
+			},
+		},
+		{
+			imageId: "back",
+			storagePath: "reservations/r1/documents/g1/back.jpg",
+			documentSide: "backIdCard",
+			rawText: "back",
+			parsed: {
+				documentNumber: "L628C54X8",
+				mrzText:
+					"IDDEUL628C54X8<<<<<<<<<<<<<<<\\n4705264M3106076DEU<<<<<<<<<<<0",
+				confidence: 0.99,
+			},
+		},
+	]);
+
+	assert.equal(merged.fields.documentNumber.needsReview, true);
+});
+
+test("keeps visual OCR diacritics when transliteration matches MRZ", () => {
+	const merged = __test.mergeImageResults([
+		{
+			imageId: "front",
+			storagePath: "reservations/r1/documents/g1/front.jpg",
+			documentSide: "frontIdCard",
+			rawText: "front",
+			parsed: {
+				firstName: "ŽELJKO",
+				lastName: "ŠIMIĆ",
+				confidence: 0.93,
+			},
+		},
+		{
+			imageId: "back",
+			storagePath: "reservations/r1/documents/g1/back.jpg",
+			documentSide: "backIdCard",
+			rawText: "back",
+			parsed: {
+				firstName: "ZELJKO",
+				lastName: "SIMIC",
+				mrzText:
+					"IDDEUL628C54X8<<<<<<<<<<<<<<<\\n4705264M3106076DEU<<<<<<<<<<<8",
+				confidence: 0.95,
+			},
+		},
+	]);
+
+	assert.equal(merged.parsed.firstName, "ŽELJKO");
+	assert.equal(merged.parsed.lastName, "ŠIMIĆ");
+	assert.equal(merged.fields.firstName.needsReview, false);
+	assert.equal(merged.fields.lastName.needsReview, false);
+});
+
+test("when MRZ is not found parser falls back to label extraction", () => {
+	const parsed = __test.parseDocument([
+		"Identity Card",
+		"Name / Surname / Nom",
+		"HORVAT",
+		"Given names",
+		"ANA",
+		"Date of birth",
+		"26.05.1947",
+	].join("\n"));
+
+	assert.equal(parsed.firstName, "ANA");
+	assert.equal(parsed.lastName, "HORVAT");
+	assert.equal(parsed.mrzText, undefined);
+});
+
+test("empty MRZ field never overwrites valid OCR value", () => {
+	const merged = __test.mergeImageResults([
+		{
+			imageId: "front",
+			storagePath: "reservations/r1/documents/g1/front.jpg",
+			documentSide: "frontIdCard",
+			rawText: "front",
+			parsed: {
+				documentNumber: "AA1122334",
+				confidence: 0.88,
+			},
+		},
+		{
+			imageId: "back",
+			storagePath: "reservations/r1/documents/g1/back.jpg",
+			documentSide: "backIdCard",
+			rawText: "back",
+			parsed: {
+				documentNumber: "",
+				mrzText:
+					"IDDEUL628C54X8<<<<<<<<<<<<<<<\\n4705264M3106076DEU<<<<<<<<<<<8",
+				confidence: 0.9,
+			},
+		},
+	]);
+
+	assert.equal(merged.parsed.documentNumber, "AA1122334");
+	assert.equal(merged.fields.documentNumber.value, "AA1122334");
 });

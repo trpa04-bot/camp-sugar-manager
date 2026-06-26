@@ -91,6 +91,30 @@ extension PaymentStatusX on PaymentStatus {
   }
 }
 
+PaymentStatus derivePaymentStatus({
+  required double totalPrice,
+  required double amountPaid,
+  PaymentStatus? currentStatus,
+}) {
+  // Preserve explicit refunded status.
+  if (currentStatus == PaymentStatus.refunded) {
+    return PaymentStatus.refunded;
+  }
+
+  // When total price is not set yet, respect explicit manual "paid" selection.
+  if (currentStatus == PaymentStatus.paid && totalPrice <= 0.01) {
+    return PaymentStatus.paid;
+  }
+
+  if (totalPrice > 0 && amountPaid >= (totalPrice - 0.01)) {
+    return PaymentStatus.paid;
+  }
+  if (amountPaid > 0.01) {
+    return PaymentStatus.partiallyPaid;
+  }
+  return PaymentStatus.unpaid;
+}
+
 class Reservation {
   const Reservation({
     required this.id,
@@ -108,11 +132,16 @@ class Reservation {
     required this.children,
     required this.pets,
     required this.vehicles,
+    this.vehicleDescription = '',
+    this.vehicleImageUrl = '',
+    this.vehicleImagePath = '',
+    this.vehicleImageSizeBytes = 0,
     required this.accommodationType,
     required this.status,
     required this.totalPrice,
     required this.depositPaid,
     required this.amountPaid,
+    this.pricePerNight = 0.0,
     required this.paymentStatus,
     required this.notes,
     required this.registeredGuestCount,
@@ -120,8 +149,30 @@ class Reservation {
     this.actualCheckInAt,
     this.actualCheckOutAt,
     this.checkedInByUid,
+    this.checkedOutByUid,
     this.createdAt,
     this.updatedAt,
+    this.pitchIds = const <String>[],
+    this.primaryGuestFirstName = '',
+    this.primaryGuestLastName = '',
+    this.infants = 0,
+    this.guestCount = 0,
+    this.pitchCount = 1,
+    this.sourceReservationId = '',
+    this.country = '',
+    this.language = '',
+    this.currency = 'EUR',
+    this.prepaidAmount = 0.0,
+    this.balanceDue = 0.0,
+    this.importMethod = '',
+    this.importConfidence = 0.0,
+    this.importNeedsReview = false,
+    this.departureDateUnknown = false,
+    this.externalSource = '',
+    this.googleCalendarEventId = '',
+    this.googleCalendarId = '',
+    this.googleCalendarLastUpdatedAt,
+    this.importedFromGoogleCalendar = false,
   });
 
   final String id;
@@ -139,11 +190,16 @@ class Reservation {
   final int children;
   final int pets;
   final int vehicles;
+  final String vehicleDescription;
+  final String vehicleImageUrl;
+  final String vehicleImagePath;
+  final int vehicleImageSizeBytes;
   final String accommodationType;
   final ReservationStatus status;
   final double totalPrice;
   final double depositPaid;
   final double amountPaid;
+  final double pricePerNight;
   final PaymentStatus paymentStatus;
   final String notes;
   final int registeredGuestCount;
@@ -151,8 +207,30 @@ class Reservation {
   final DateTime? actualCheckInAt;
   final DateTime? actualCheckOutAt;
   final String? checkedInByUid;
+  final String? checkedOutByUid;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final List<String> pitchIds;
+  final String primaryGuestFirstName;
+  final String primaryGuestLastName;
+  final int infants;
+  final int guestCount;
+  final int pitchCount;
+  final String sourceReservationId;
+  final String country;
+  final String language;
+  final String currency;
+  final double prepaidAmount;
+  final double balanceDue;
+  final String importMethod;
+  final double importConfidence;
+  final bool importNeedsReview;
+  final bool departureDateUnknown;
+  final String externalSource;
+  final String googleCalendarEventId;
+  final String googleCalendarId;
+  final DateTime? googleCalendarLastUpdatedAt;
+  final bool importedFromGoogleCalendar;
 
   factory Reservation.empty() {
     final now = DateTime.now();
@@ -177,6 +255,7 @@ class Reservation {
       totalPrice: 0,
       depositPaid: 0,
       amountPaid: 0,
+      pricePerNight: 0.0,
       paymentStatus: PaymentStatus.unpaid,
       notes: '',
       registeredGuestCount: 0,
@@ -206,6 +285,10 @@ class Reservation {
       children: _readInt(data['children']) ?? 0,
       pets: _readInt(data['pets']) ?? 0,
       vehicles: _readInt(data['vehicles']) ?? 0,
+      vehicleDescription: (data['vehicleDescription'] as String?) ?? '',
+      vehicleImageUrl: (data['vehicleImageUrl'] as String?) ?? '',
+      vehicleImagePath: (data['vehicleImagePath'] as String?) ?? '',
+      vehicleImageSizeBytes: _readInt(data['vehicleImageSizeBytes']) ?? 0,
       accommodationType: (data['accommodationType'] as String?) ?? '',
       status: reservationStatusFromString(
         (data['status'] as String?) ?? 'inquiry',
@@ -213,6 +296,7 @@ class Reservation {
       totalPrice: _readDouble(data['totalPrice']) ?? 0,
       depositPaid: _readDouble(data['depositPaid']) ?? 0,
       amountPaid: _readDouble(data['amountPaid']) ?? 0,
+      pricePerNight: _readDouble(data['pricePerNight']) ?? 0,
       paymentStatus: paymentStatusFromString(
         (data['paymentStatus'] as String?) ?? 'unpaid',
       ),
@@ -222,8 +306,33 @@ class Reservation {
       actualCheckInAt: _readDate(data['actualCheckInAt']),
       actualCheckOutAt: _readDate(data['actualCheckOutAt']),
       checkedInByUid: (data['checkedInByUid'] as String?)?.trim(),
+      checkedOutByUid: (data['checkedOutByUid'] as String?)?.trim(),
       createdAt: _readDate(data['createdAt']),
       updatedAt: _readDate(data['updatedAt']),
+      pitchIds: _readList(data['pitchIds']),
+      primaryGuestFirstName: (data['primaryGuestFirstName'] as String?) ?? '',
+      primaryGuestLastName: (data['primaryGuestLastName'] as String?) ?? '',
+      infants: _readInt(data['infants']) ?? 0,
+      guestCount: _readInt(data['guestCount']) ?? 0,
+      pitchCount: _readInt(data['pitchCount']) ?? 1,
+      sourceReservationId: (data['sourceReservationId'] as String?) ?? '',
+      country: (data['country'] as String?) ?? '',
+      language: (data['language'] as String?) ?? '',
+      currency: (data['currency'] as String?) ?? 'EUR',
+      prepaidAmount: _readDouble(data['prepaidAmount']) ?? 0.0,
+      balanceDue: _readDouble(data['balanceDue']) ?? 0.0,
+      importMethod: (data['importMethod'] as String?) ?? '',
+      importConfidence: _readDouble(data['importConfidence']) ?? 0.0,
+      importNeedsReview: (data['importNeedsReview'] as bool?) ?? false,
+      departureDateUnknown: (data['departureDateUnknown'] as bool?) ?? false,
+      externalSource: (data['externalSource'] as String?) ?? '',
+      googleCalendarEventId: (data['googleCalendarEventId'] as String?) ?? '',
+      googleCalendarId: (data['googleCalendarId'] as String?) ?? '',
+      googleCalendarLastUpdatedAt: _readDate(
+        data['googleCalendarLastUpdatedAt'],
+      ),
+      importedFromGoogleCalendar:
+          (data['importedFromGoogleCalendar'] as bool?) ?? false,
     );
   }
 
@@ -257,6 +366,13 @@ class Reservation {
     return null;
   }
 
+  static List<String> _readList(dynamic value) {
+    if (value is List) {
+      return value.whereType<String>().toList();
+    }
+    return const <String>[];
+  }
+
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
       'id': id,
@@ -274,11 +390,16 @@ class Reservation {
       'children': children,
       'pets': pets,
       'vehicles': vehicles,
+      'vehicleDescription': vehicleDescription,
+      'vehicleImageUrl': vehicleImageUrl,
+      'vehicleImagePath': vehicleImagePath,
+      'vehicleImageSizeBytes': vehicleImageSizeBytes,
       'accommodationType': accommodationType,
       'status': status.name,
       'totalPrice': totalPrice,
       'depositPaid': depositPaid,
       'amountPaid': amountPaid,
+      'pricePerNight': pricePerNight,
       'paymentStatus': paymentStatus.name,
       'notes': notes,
       'registeredGuestCount': registeredGuestCount,
@@ -289,8 +410,34 @@ class Reservation {
         'actualCheckOutAt': Timestamp.fromDate(actualCheckOutAt!),
       if ((checkedInByUid ?? '').trim().isNotEmpty)
         'checkedInByUid': checkedInByUid,
+      if ((checkedOutByUid ?? '').trim().isNotEmpty)
+        'checkedOutByUid': checkedOutByUid,
       if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
       if (updatedAt != null) 'updatedAt': Timestamp.fromDate(updatedAt!),
+      'pitchIds': pitchIds,
+      'primaryGuestFirstName': primaryGuestFirstName,
+      'primaryGuestLastName': primaryGuestLastName,
+      'infants': infants,
+      'guestCount': guestCount,
+      'pitchCount': pitchCount,
+      'sourceReservationId': sourceReservationId,
+      'country': country,
+      'language': language,
+      'currency': currency,
+      'prepaidAmount': prepaidAmount,
+      'balanceDue': balanceDue,
+      'importMethod': importMethod,
+      'importConfidence': importConfidence,
+      'importNeedsReview': importNeedsReview,
+      'departureDateUnknown': departureDateUnknown,
+      'externalSource': externalSource,
+      'googleCalendarEventId': googleCalendarEventId,
+      'googleCalendarId': googleCalendarId,
+      if (googleCalendarLastUpdatedAt != null)
+        'googleCalendarLastUpdatedAt': Timestamp.fromDate(
+          googleCalendarLastUpdatedAt!,
+        ),
+      'importedFromGoogleCalendar': importedFromGoogleCalendar,
     };
   }
 
@@ -310,11 +457,16 @@ class Reservation {
     int? children,
     int? pets,
     int? vehicles,
+    String? vehicleDescription,
+    String? vehicleImageUrl,
+    String? vehicleImagePath,
+    int? vehicleImageSizeBytes,
     String? accommodationType,
     ReservationStatus? status,
     double? totalPrice,
     double? depositPaid,
     double? amountPaid,
+    double? pricePerNight,
     PaymentStatus? paymentStatus,
     String? notes,
     int? registeredGuestCount,
@@ -322,8 +474,30 @@ class Reservation {
     DateTime? actualCheckInAt,
     DateTime? actualCheckOutAt,
     String? checkedInByUid,
+    String? checkedOutByUid,
     DateTime? createdAt,
     DateTime? updatedAt,
+    List<String>? pitchIds,
+    String? primaryGuestFirstName,
+    String? primaryGuestLastName,
+    int? infants,
+    int? guestCount,
+    int? pitchCount,
+    String? sourceReservationId,
+    String? country,
+    String? language,
+    String? currency,
+    double? prepaidAmount,
+    double? balanceDue,
+    String? importMethod,
+    double? importConfidence,
+    bool? importNeedsReview,
+    bool? departureDateUnknown,
+    String? externalSource,
+    String? googleCalendarEventId,
+    String? googleCalendarId,
+    DateTime? googleCalendarLastUpdatedAt,
+    bool? importedFromGoogleCalendar,
   }) {
     return Reservation(
       id: id ?? this.id,
@@ -341,11 +515,17 @@ class Reservation {
       children: children ?? this.children,
       pets: pets ?? this.pets,
       vehicles: vehicles ?? this.vehicles,
+      vehicleDescription: vehicleDescription ?? this.vehicleDescription,
+      vehicleImageUrl: vehicleImageUrl ?? this.vehicleImageUrl,
+      vehicleImagePath: vehicleImagePath ?? this.vehicleImagePath,
+      vehicleImageSizeBytes:
+          vehicleImageSizeBytes ?? this.vehicleImageSizeBytes,
       accommodationType: accommodationType ?? this.accommodationType,
       status: status ?? this.status,
       totalPrice: totalPrice ?? this.totalPrice,
       depositPaid: depositPaid ?? this.depositPaid,
       amountPaid: amountPaid ?? this.amountPaid,
+      pricePerNight: pricePerNight ?? this.pricePerNight,
       paymentStatus: paymentStatus ?? this.paymentStatus,
       notes: notes ?? this.notes,
       registeredGuestCount: registeredGuestCount ?? this.registeredGuestCount,
@@ -353,8 +533,42 @@ class Reservation {
       actualCheckInAt: actualCheckInAt ?? this.actualCheckInAt,
       actualCheckOutAt: actualCheckOutAt ?? this.actualCheckOutAt,
       checkedInByUid: checkedInByUid ?? this.checkedInByUid,
+      checkedOutByUid: checkedOutByUid ?? this.checkedOutByUid,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      pitchIds: pitchIds ?? this.pitchIds,
+      primaryGuestFirstName:
+          primaryGuestFirstName ?? this.primaryGuestFirstName,
+      primaryGuestLastName: primaryGuestLastName ?? this.primaryGuestLastName,
+      infants: infants ?? this.infants,
+      guestCount: guestCount ?? this.guestCount,
+      pitchCount: pitchCount ?? this.pitchCount,
+      sourceReservationId: sourceReservationId ?? this.sourceReservationId,
+      country: country ?? this.country,
+      language: language ?? this.language,
+      currency: currency ?? this.currency,
+      prepaidAmount: prepaidAmount ?? this.prepaidAmount,
+      balanceDue: balanceDue ?? this.balanceDue,
+      importMethod: importMethod ?? this.importMethod,
+      importConfidence: importConfidence ?? this.importConfidence,
+      importNeedsReview: importNeedsReview ?? this.importNeedsReview,
+      departureDateUnknown: departureDateUnknown ?? this.departureDateUnknown,
+      externalSource: externalSource ?? this.externalSource,
+      googleCalendarEventId:
+          googleCalendarEventId ?? this.googleCalendarEventId,
+      googleCalendarId: googleCalendarId ?? this.googleCalendarId,
+      googleCalendarLastUpdatedAt:
+          googleCalendarLastUpdatedAt ?? this.googleCalendarLastUpdatedAt,
+      importedFromGoogleCalendar:
+          importedFromGoogleCalendar ?? this.importedFromGoogleCalendar,
     );
   }
+}
+
+extension ReservationPaymentStateX on Reservation {
+  PaymentStatus get effectivePaymentStatus => derivePaymentStatus(
+    totalPrice: totalPrice,
+    amountPaid: amountPaid,
+    currentStatus: paymentStatus,
+  );
 }

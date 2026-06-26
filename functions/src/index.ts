@@ -4,6 +4,20 @@ import * as logger from "firebase-functions/logger";
 import {setGlobalOptions} from "firebase-functions/v2";
 import * as functionsV1 from "firebase-functions/v1";
 import {ImageAnnotatorClient} from "@google-cloud/vision";
+import {
+	getGoogleCalendarAuthorizationUrl as getGoogleCalendarAuthorizationUrlImpl,
+	handleGoogleCalendarOAuthCallback as handleGoogleCalendarOAuthCallbackImpl,
+	listGoogleCalendars as listGoogleCalendarsImpl,
+	syncGoogleCalendarEvents as syncGoogleCalendarEventsImpl,
+	disconnectGoogleCalendar as disconnectGoogleCalendarImpl,
+	googleCalendarOAuthCallback as googleCalendarOAuthCallbackImpl,
+	scheduledGoogleCalendarSync as scheduledGoogleCalendarSyncImpl,
+	__calendarTest,
+} from "./google_calendar.js";
+import {
+	parseMrzFromLines as parseDoc9303MrzFromLines,
+	type MrzParseResult,
+} from "./ocr/mrz/doc9303_parser.js";
 
 admin.initializeApp();
 setGlobalOptions({maxInstances: 10, region: "europe-west1"});
@@ -109,6 +123,15 @@ interface NameFieldResolution {
 	debug: NameFieldDebugInfo;
 	mrzCandidate?: NameCandidate;
 	visualCandidate?: NameCandidate;
+}
+
+interface FieldCandidate {
+	value: string;
+	canonicalValue: string;
+	score: number;
+	sourceImageId: string;
+	sourceType: MergedField["sourceType"];
+	mrzValid: boolean;
 }
 
 const ENABLE_NAME_CANDIDATE_DEBUG = true;
@@ -349,7 +372,104 @@ function parseDocument(
 	parsed.documentKind = kind;
 	parsed.documentType = kind;
 
+	applyPassportFallbacks(parsed, parserLines, lines);
+	applyIdCardFallbacks(parsed, parserLines, context);
+
 	return parsed;
+}
+
+function applyPassportFallbacks(parsed: ParsedData, parserLines: string[], rawLines: string[]): void {
+	if ((parsed.documentKind ?? parsed.documentType) !== "passport") {
+		return;
+	}
+
+	if (!parsed.documentNumber) {
+		const byPassportLabel = findValueAfterLabel(parserLines, [
+			"Passport No",
+			"Passport number",
+			"No. du passeport",
+			"Reisepass-Nr",
+			"Pass Nr",
+			"Passnummer",
+		], {
+			validator: isValidDocumentNumber,
+			regexBonus: /^[A-Z0-9<]{5,20}$/,
+		});
+
+		if (byPassportLabel) {
+			parsed.documentNumber = normalizeDocumentNumberGeneral(byPassportLabel);
+		}
+	}
+
+	if (!parsed.documentNumber) {
+		for (const line of [...parserLines, ...rawLines]) {
+			const tokens = line.toUpperCase().match(/[A-Z0-9<]{5,20}/g) || [];
+			for (const token of tokens) {
+				if (isValidDocumentNumber(token)) {
+					parsed.documentNumber = normalizeDocumentNumberGeneral(token);
+					break;
+				}
+			}
+			if (parsed.documentNumber) {
+				break;
+			}
+		}
+	}
+
+	if (!parsed.lastName) {
+		parsed.lastName = sanitizeName(
+			findValueAfterLabel(parserLines, ["Surname", "Name", "Nom", "Familienname"])
+		);
+	}
+
+	if (!parsed.firstName) {
+		parsed.firstName = sanitizeName(
+			findValueAfterLabel(parserLines, ["Given names", "Given name", "Vornamen", "Prénoms", "Prenoms"])
+		);
+	}
+
+	const suspiciousNationality = (parsed.nationality ?? "").trim().toUpperCase();
+	const suspiciousNationalityCode = (parsed.nationalityCode ?? "").trim().toUpperCase();
+	if (
+		["REI", "REISEPASS", "PASSPORT"].includes(suspiciousNationality) ||
+		["REI", "REISEPASS", "PASSPORT"].includes(suspiciousNationalityCode)
+	) {
+		parsed.nationality = undefined;
+		parsed.nationalityCode = undefined;
+		parsed.nationalityDisplayName = undefined;
+	}
+
+	if (!parsed.nationalityCode) {
+		const fallbackCode = normalizeCountryCode(parsed.issuingCountry);
+		if (fallbackCode) {
+			const meta = mapNationality(fallbackCode);
+			parsed.nationality = meta.code;
+			parsed.nationalityCode = meta.code;
+			parsed.nationalityDisplayName = meta.displayName;
+		}
+	}
+}
+
+function applyIdCardFallbacks(parsed: ParsedData, lines: string[], context: DocumentContext): void {
+	if ((parsed.documentKind ?? parsed.documentType) !== "nationalIdCard") {
+		return;
+	}
+
+	const joined = lines.join(" ").toLowerCase();
+	const isRomanianCard = joined.includes("osobna iskaznica");
+	
+	const docNumberRaw = (parsed.documentNumber ?? "").trim().toUpperCase();
+	const isRomanianByDocNumber = docNumberRaw.match(/^8\d+/) !== null;
+
+	const nationalityRaw = (parsed.nationality ?? "").trim().toUpperCase();
+	const isNumericNationality = nationalityRaw && /^\d+$/.test(nationalityRaw);
+
+	if (isRomanianCard || isRomanianByDocNumber || isNumericNationality) {
+		const meta = mapNationality("ROU");
+		parsed.nationality = meta.code;
+		parsed.nationalityCode = meta.code;
+		parsed.nationalityDisplayName = meta.displayName;
+	}
 }
 
 function normalizeLines(rawText: string): string[] {
@@ -359,16 +479,64 @@ function normalizeLines(rawText: string): string[] {
 		.filter((line) => line.length > 0);
 }
 
+function mapDoc9303Result(result: MrzParseResult): {lines: string[]; format: MrzFormat; parsed: ParsedData} {
+	const documentCode = (result.parsed.documentCode || "").replace(/\s+/g, "").toUpperCase();
+	const mrzTypeToFormat: Record<string, MrzFormat> = {
+		TD1: "TD1",
+		TD2: "TD2",
+		TD3: "TD3",
+	};
+	const format = mrzTypeToFormat[result.mrzType] || "TD1";
+	const documentKind =
+		format === "TD3"
+			? "passport"
+			: documentCode.startsWith("V")
+				? "residencePermit"
+				: mapDocumentCodeToKind(documentCode);
+
+	const normalizedNationality = normalizeCountryCode(result.parsed.nationality);
+	const nationalityMeta = mapNationality(normalizedNationality);
+
+	return {
+		lines: result.cleanedLines,
+		format,
+		parsed: {
+			documentCode,
+			documentKind,
+			documentType: documentKind,
+			firstName: result.parsed.firstName,
+			middleNames: result.parsed.middleNames,
+			lastName: result.parsed.lastName,
+			dateOfBirth: result.parsed.dateOfBirth,
+			nationality: nationalityMeta.code,
+			nationalityCode: nationalityMeta.code,
+			nationalityDisplayName: nationalityMeta.displayName,
+			documentNumber: normalizeDocumentNumberGeneral(result.parsed.documentNumber),
+			documentExpiryDate: result.parsed.dateOfExpiry,
+			gender: result.parsed.sex,
+			issuingCountry: normalizeCountryCode(result.parsed.issuingCountry),
+			optionalData: result.parsed.optionalData,
+			personalNumber: result.parsed.personalNumber,
+			confidence: result.confidence,
+		},
+	};
+}
+
 function extractMrz(lines: string[]): {lines: string[]; format: MrzFormat; parsed: ParsedData} | null {
+	const doc9303Parsed = parseDoc9303MrzFromLines(lines);
+	if (doc9303Parsed) {
+		return mapDoc9303Result(doc9303Parsed);
+	}
+
 	const mrzLike = lines
-		.map((line) => line.replace(/\s+/g, ""))
-		.filter((line) => /^[A-Z0-9<]{25,}$/.test(line));
+		.map((line) => line.toUpperCase().replace(/[^A-Z0-9<]/g, ""))
+		.filter((line) => line.length >= 25 && /^[A-Z0-9<]+$/.test(line) && line.includes("<"));
 
 	for (let i = 0; i < mrzLike.length - 2; i++) {
 		const l1 = padMrz(mrzLike[i], 30);
 		const l2 = padMrz(mrzLike[i + 1], 30);
 		const l3 = padMrz(mrzLike[i + 2], 30);
-		if (l1 && l2 && l3) {
+		if (l1 && l2 && l3 && l3.includes("<<") && /^([ACI])[A-Z]/.test(l1)) {
 			return {lines: [l1, l2, l3], format: "TD1", parsed: parseTd1([l1, l2, l3])};
 		}
 	}
@@ -376,7 +544,13 @@ function extractMrz(lines: string[]): {lines: string[]; format: MrzFormat; parse
 	for (let i = 0; i < mrzLike.length - 1; i++) {
 		const l1_44 = padMrz(mrzLike[i], 44);
 		const l2_44 = padMrz(mrzLike[i + 1], 44);
-		if (l1_44 && l2_44) {
+		if (
+			l1_44 &&
+			l2_44 &&
+			l1_44.includes("<<") &&
+			(l1_44.startsWith("P<") || l1_44.startsWith("V<")) &&
+			/\d/.test(l2_44.substring(0, 12))
+		) {
 			const code = normalizeMrzCode(l1_44.substring(0, 2));
 			const format: MrzFormat = code.startsWith("V") ? "MRV-A" : "TD3";
 			return {
@@ -388,7 +562,7 @@ function extractMrz(lines: string[]): {lines: string[]; format: MrzFormat; parse
 
 		const l1_36 = padMrz(mrzLike[i], 36);
 		const l2_36 = padMrz(mrzLike[i + 1], 36);
-		if (l1_36 && l2_36) {
+		if (l1_36 && l2_36 && l1_36.includes("<<") && /^([AIV])</.test(l1_36) && /\d/.test(l2_36.substring(0, 10))) {
 			const code = normalizeMrzCode(l1_36.substring(0, 2));
 			const format: MrzFormat = code.startsWith("V") ? "MRV-B" : "TD2";
 			return {
@@ -704,7 +878,18 @@ const LABEL_DICTIONARY: Record<string, string[]> = {
 		"Nationality",
 		"Nationalité",
 	],
-	documentNumber: ["Broj dokumenta", "Ausweisnummer", "Document No", "Document number", "Personal ID"],
+	documentNumber: [
+		"Broj dokumenta",
+		"Ausweisnummer",
+		"Document No",
+		"Document number",
+		"Personal ID",
+		"Passport No",
+		"Passport number",
+		"Reisepass-Nr",
+		"Pass Nr",
+		"Passnummer",
+	],
 	documentExpiryDate: ["Vrijedi do", "Gültig bis", "Date of expiry", "Date d'expiration"],
 	issueDate: ["Datum izdavanja", "Ausstellungsdatum", "Ausgestellt am", "Date of issue", "Issued on"],
 	gender: ["Spol", "Geschlecht", "Sex", "Gender"],
@@ -942,6 +1127,7 @@ const ISO_3166_ALPHA3_TO_DISPLAY: Record<string, string> = {
 	USA: "Sjedinjene Američke Države",
 	CAN: "Kanada",
 	AUS: "Australija",
+	ROU: "Rumunjska",
 };
 
 const COUNTRY_CODE_ALIASES: Record<string, string> = {
@@ -970,18 +1156,26 @@ const COUNTRY_CODE_ALIASES: Record<string, string> = {
 	US: "USA",
 	CA: "CAN",
 	AU: "AUS",
+	RO: "ROU",
+	ROM: "ROU",
+	ROMANIA: "ROU",
+	ROMANIAN: "ROU",
+	RUMUNJSKA: "ROU",
 };
 
 function normalizeCountryCode(value?: string): string | undefined {
 	if (!value) return undefined;
+	const beforeClean = value.trim();
+	if (/^\d+$/.test(beforeClean)) return undefined;
 	const cleaned = cleanupCandidate(value)
 		.replace(/</g, "")
 		.replace(/[^\p{L}0-9]/gu, "")
 		.toUpperCase();
 	if (!cleaned) return undefined;
+	if (/^\d+$/.test(cleaned)) return undefined;
 	if (COUNTRY_CODE_ALIASES[cleaned]) return COUNTRY_CODE_ALIASES[cleaned];
 	if (cleaned.length === 3 && ISO_3166_ALPHA3_TO_DISPLAY[cleaned]) return cleaned;
-	if (cleaned.length <= 3) return cleaned;
+	if (cleaned.length <= 3 && !/^\d+$/.test(cleaned)) return cleaned;
 	return undefined;
 }
 
@@ -1106,6 +1300,7 @@ const COUNTRY_ADAPTERS: DocumentCountryAdapter[] = [
 	createCountryAdapter("CzechRepublic", ["CZE"]),
 	createCountryAdapter("Slovakia", ["SVK"]),
 	createCountryAdapter("Hungary", ["HUN"]),
+	createCountryAdapter("Romania", ["ROU"]),
 ];
 
 function createCountryAdapter(name: string, countryCodes: string[]): DocumentCountryAdapter {
@@ -1383,6 +1578,20 @@ function resolveNameField(images: OcrImageResult[], field: "firstName" | "lastNa
 	const best = validCandidates[0];
 	const bestVisual = visualCandidates[0];
 	const bestMrz = mrzCandidates[0];
+	const bestMatchingVisual =
+		bestMrz == null
+			? undefined
+			: visualCandidates.find(
+				(candidate) => candidate.canonicalValue === bestMrz.canonicalValue
+			);
+
+	const selected =
+		bestMrz != null && bestMatchingVisual != null
+			? {
+				...bestMatchingVisual,
+				score: Math.max(bestMatchingVisual.score, bestMrz.score),
+			}
+			: best;
 	const hasConflictCandidate =
 		bestMrz != null &&
 		visualCandidates.some(
@@ -1394,24 +1603,24 @@ function resolveNameField(images: OcrImageResult[], field: "firstName" | "lastNa
 
 	let bestImage: OcrImageResult | undefined;
 	for (const image of images) {
-		if (image.imageId == best.sourceImageId) {
+		if (image.imageId == selected.sourceImageId) {
 			bestImage = image;
 			break;
 		}
 	}
 	const fromValidMrz =
-		best.sourceType === "mrz" &&
+		selected.sourceType === "mrz" &&
 		bestImage != null &&
 		isMrzChecksumValid(bestImage.parsed.mrzText);
 
-	const needsReview = hasConflictCandidate || (!fromValidMrz && best.score < 0.75);
+	const needsReview = hasConflictCandidate || (!fromValidMrz && selected.score < 0.75);
 
 	return {
 		field: {
-			value: best.value,
-			confidence: roundConfidence(best.score),
-			sourceImageId: best.sourceImageId,
-			sourceType: best.sourceType,
+			value: selected.value,
+			confidence: roundConfidence(selected.score),
+			sourceImageId: selected.sourceImageId,
+			sourceType: selected.sourceType,
 			needsReview,
 		},
 		debug: {
@@ -1497,6 +1706,7 @@ function resolveField(
 	validator: (value: string) => boolean,
 	options: {optional?: boolean} = {}
 ): MergedField {
+	const criticalMrzField = isCriticalMrzField(field);
 	const candidates = images
 		.map((image) => {
 			const valueRaw = (image.parsed[field] as string | undefined) || "";
@@ -1507,22 +1717,22 @@ function resolveField(
 
 			const sourceType = inferSourceType(image, field, value);
 			let score = image.parsed.confidence || 0.5;
-			if (sourceType === "mrz") score += isMrzChecksumValid(image.parsed.mrzText) ? 0.45 : 0.15;
+			const mrzValid = sourceType === "mrz" && isMrzChecksumValidForField(image.parsed.mrzText, field);
+			if (sourceType === "mrz") score += mrzValid ? 0.45 : 0.15;
 			if (sourceType === "labelMatch") score += 0.2;
 			if (sourceType === "fallback") score -= 0.1;
 
-			return {value, canonicalValue, score, sourceImageId: image.imageId, sourceType};
+			return {
+				value,
+				canonicalValue,
+				score,
+				sourceImageId: image.imageId,
+				sourceType,
+				mrzValid,
+			};
 		})
 		.filter(
-			(
-				candidate
-			): candidate is {
-				value: string;
-				canonicalValue: string;
-				score: number;
-				sourceImageId: string;
-				sourceType: MergedField["sourceType"];
-			} => candidate !== null
+			(candidate): candidate is FieldCandidate => candidate !== null
 		);
 
 	if (candidates.length === 0) {
@@ -1545,7 +1755,15 @@ function resolveField(
 		return b.score - a.score;
 	});
 
-	const best = candidates[0];
+	const hasInvalidMrzCandidate = criticalMrzField
+		? candidates.some((candidate) => candidate.sourceType === "mrz" && !candidate.mrzValid)
+		: false;
+
+	const bestValidMrz = criticalMrzField
+		? candidates.find((candidate) => candidate.sourceType === "mrz" && candidate.mrzValid)
+		: undefined;
+
+	const best = bestValidMrz ?? candidates[0];
 	const hasConflictCandidate = candidates.some(
 		(candidate) => candidate.canonicalValue !== best.canonicalValue && candidate.score > 0.75
 	);
@@ -1562,7 +1780,12 @@ function resolveField(
 		bestImage != null &&
 		isMrzChecksumValid(bestImage.parsed.mrzText);
 
-	const needsReview = hasConflictCandidate || (!fromValidMrz && best.score < 0.75);
+	const invalidMrzForSelected = best.sourceType === "mrz" && !best.mrzValid;
+	const needsReview =
+		hasConflictCandidate ||
+		hasInvalidMrzCandidate ||
+		invalidMrzForSelected ||
+		(!fromValidMrz && best.score < 0.75);
 
 	return {
 		value: best.value,
@@ -1713,6 +1936,13 @@ function findNonMrzFieldValues(images: OcrImageResult[], field: keyof ParsedData
 }
 
 function normalizeFieldForComparison(field: keyof ParsedData, value: string): string {
+	if (field === "nationality" || field === "nationalityCode" || field === "issuingCountry") {
+		const normalizedCountry = normalizeCountryCode(value);
+		if (normalizedCountry) {
+			return normalizedCountry;
+		}
+	}
+
 	const normalized = normalizeMergeComparisonValue(value);
 	if (
 		field === "documentNumber" ||
@@ -2000,18 +2230,98 @@ function isMrzChecksumValid(mrzText?: string): boolean {
 		.filter((line) => line.length > 0);
 
 	if (lines.length >= 3 && lines[0].length >= 30 && lines[1].length >= 30 && lines[2].length >= 30) {
+		const first = lines[0];
 		const second = lines[1];
-		return validateMrzCheck(second.substring(0, 6), second[6]) && validateMrzCheck(second.substring(8, 14), second[14]);
+		return (
+			validateMrzCheck(first.substring(5, 14), first[14]) &&
+			validateMrzCheck(second.substring(0, 6), second[6]) &&
+			validateMrzCheck(second.substring(8, 14), second[14])
+		);
 	}
 	if (lines.length >= 2 && lines[0].length >= 44 && lines[1].length >= 44) {
 		const second = lines[1];
-		return validateMrzCheck(second.substring(13, 19), second[19]) && validateMrzCheck(second.substring(21, 27), second[27]);
+		return (
+			validateMrzCheck(second.substring(0, 9), second[9]) &&
+			validateMrzCheck(second.substring(13, 19), second[19]) &&
+			validateMrzCheck(second.substring(21, 27), second[27])
+		);
 	}
 	if (lines.length >= 2 && lines[0].length >= 36 && lines[1].length >= 36) {
 		const second = lines[1];
-		return validateMrzCheck(second.substring(13, 19), second[19]) && validateMrzCheck(second.substring(21, 27), second[27]);
+		return (
+			validateMrzCheck(second.substring(0, 9), second[9]) &&
+			validateMrzCheck(second.substring(13, 19), second[19]) &&
+			validateMrzCheck(second.substring(21, 27), second[27])
+		);
 	}
 	return false;
+}
+
+function isMrzChecksumValidForField(
+	mrzText: string | undefined,
+	field: keyof ParsedData
+): boolean {
+	if (!mrzText) return false;
+	if (field === "documentNumber") {
+		return validateMrzFieldChecksum(mrzText, "documentNumber");
+	}
+	if (field === "dateOfBirth") {
+		return validateMrzFieldChecksum(mrzText, "dateOfBirth");
+	}
+	if (field === "documentExpiryDate") {
+		return validateMrzFieldChecksum(mrzText, "documentExpiryDate");
+	}
+	return isMrzChecksumValid(mrzText);
+}
+
+function validateMrzFieldChecksum(
+	mrzText: string,
+	field: "documentNumber" | "dateOfBirth" | "documentExpiryDate"
+): boolean {
+	const lines = mrzText
+		.split(/\r?\n/)
+		.map((line) => line.replace(/\s+/g, ""))
+		.filter((line) => line.length > 0);
+
+	if (lines.length >= 3 && lines[0].length >= 30 && lines[1].length >= 30 && lines[2].length >= 30) {
+		const first = lines[0];
+		const second = lines[1];
+		if (field === "documentNumber") {
+			return validateMrzCheck(first.substring(5, 14), first[14]);
+		}
+		if (field === "dateOfBirth") {
+			return validateMrzCheck(second.substring(0, 6), second[6]);
+		}
+		return validateMrzCheck(second.substring(8, 14), second[14]);
+	}
+
+	if (lines.length >= 2 && lines[0].length >= 44 && lines[1].length >= 44) {
+		const second = lines[1];
+		if (field === "documentNumber") {
+			return validateMrzCheck(second.substring(0, 9), second[9]);
+		}
+		if (field === "dateOfBirth") {
+			return validateMrzCheck(second.substring(13, 19), second[19]);
+		}
+		return validateMrzCheck(second.substring(21, 27), second[27]);
+	}
+
+	if (lines.length >= 2 && lines[0].length >= 36 && lines[1].length >= 36) {
+		const second = lines[1];
+		if (field === "documentNumber") {
+			return validateMrzCheck(second.substring(0, 9), second[9]);
+		}
+		if (field === "dateOfBirth") {
+			return validateMrzCheck(second.substring(13, 19), second[19]);
+		}
+		return validateMrzCheck(second.substring(21, 27), second[27]);
+	}
+
+	return false;
+}
+
+function isCriticalMrzField(field: keyof ParsedData): boolean {
+	return field === "documentNumber" || field === "dateOfBirth" || field === "documentExpiryDate";
 }
 
 function validateMrzCheck(value: string, checkDigit: string): boolean {
@@ -2082,3 +2392,15 @@ export const __test = {
 	resolveField,
 	validateMrzCheck,
 };
+
+export const getGoogleCalendarAuthorizationUrl =
+	getGoogleCalendarAuthorizationUrlImpl;
+export const handleGoogleCalendarOAuthCallback =
+	handleGoogleCalendarOAuthCallbackImpl;
+export const listGoogleCalendars = listGoogleCalendarsImpl;
+export const syncGoogleCalendarEvents = syncGoogleCalendarEventsImpl;
+export const disconnectGoogleCalendar = disconnectGoogleCalendarImpl;
+export const googleCalendarOAuthCallback = googleCalendarOAuthCallbackImpl;
+export const scheduledGoogleCalendarSync = scheduledGoogleCalendarSyncImpl;
+
+export const __googleCalendarTest = __calendarTest;

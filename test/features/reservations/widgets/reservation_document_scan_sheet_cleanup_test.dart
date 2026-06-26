@@ -1,4 +1,5 @@
 import 'package:camp_sugar_manager/features/reservations/models/document_image.dart';
+import 'package:camp_sugar_manager/features/reservations/models/reservation.dart';
 import 'package:camp_sugar_manager/features/reservations/models/reservation_guest.dart';
 import 'package:camp_sugar_manager/features/reservations/services/reservation_service.dart';
 import 'package:camp_sugar_manager/features/reservations/widgets/reservation_document_scan_sheet.dart';
@@ -61,6 +62,37 @@ void main() {
     FakeFirebaseFirestore firestore,
     ReservationGuest guest,
   ) async {
+    final reservation = Reservation(
+      id: 'res-1',
+      bookingReference: 'B1',
+      source: ReservationSource.direct,
+      primaryGuestName: 'Ana Horvat',
+      primaryGuestId: 'g1',
+      primaryGuestPhone: '',
+      primaryGuestEmail: '',
+      pitchId: 'pitch-1',
+      pitchName: 'Parcela 1',
+      checkInDate: DateTime(2026, 6, 20),
+      checkOutDate: DateTime(2026, 6, 24),
+      adults: 2,
+      children: 0,
+      pets: 0,
+      vehicles: 1,
+      accommodationType: 'Camper',
+      status: ReservationStatus.confirmed,
+      totalPrice: 0,
+      depositPaid: 0,
+      amountPaid: 0,
+      paymentStatus: PaymentStatus.unpaid,
+      notes: '',
+      registeredGuestCount: 1,
+      currentGuests: 0,
+    );
+
+    await firestore
+        .collection('reservations')
+        .doc('res-1')
+        .set(reservation.toMap());
     await firestore
         .collection('reservations')
         .doc('res-1')

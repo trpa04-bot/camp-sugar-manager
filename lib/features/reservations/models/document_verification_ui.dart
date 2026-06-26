@@ -39,15 +39,26 @@ DocumentAcceptanceStatus resolveAcceptanceStatus({
   required Map<String, DocumentScanField> fields,
   required List<String> conflicts,
 }) {
+  final kind = (parsed.documentKind ?? parsed.documentType ?? '').trim();
+  final hasDocumentNumber = (parsed.documentNumber ?? '').trim().isNotEmpty;
+
+  // For passports: only document number is required (can redo names manually)
+  if (kind == 'passport') {
+    if (!hasDocumentNumber) {
+      return DocumentAcceptanceStatus.rejected;
+    }
+    // Passport with document number but missing names = manual only
+    return DocumentAcceptanceStatus.manualOnly;
+  }
+
   final hasCoreData =
       (parsed.firstName ?? '').trim().isNotEmpty &&
       (parsed.lastName ?? '').trim().isNotEmpty &&
-      (parsed.documentNumber ?? '').trim().isNotEmpty;
+      hasDocumentNumber;
   if (!hasCoreData) {
     return DocumentAcceptanceStatus.rejected;
   }
 
-  final kind = (parsed.documentKind ?? parsed.documentType ?? '').trim();
   if (kind == 'drivingLicence') {
     return DocumentAcceptanceStatus.manualOnly;
   }

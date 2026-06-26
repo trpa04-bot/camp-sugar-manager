@@ -93,12 +93,13 @@ void main() {
             item.totalPitches == 1 &&
             item.currentGuests == 1 &&
             item.arrivalsToday == 1 &&
-            item.departuresToday == 1,
+            item.plannedDeparturesToday == 1,
       );
 
       expect(stats.currentGuests, 1);
       expect(stats.arrivalsToday, 1);
-      expect(stats.departuresToday, 1);
+      expect(stats.departuresToday, 0);
+      expect(stats.plannedDeparturesToday, 1);
     },
   );
 

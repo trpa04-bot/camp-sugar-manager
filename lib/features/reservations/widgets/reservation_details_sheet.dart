@@ -1,9 +1,17 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../../parcels/models/pitch.dart';
+import '../../parcels/services/pitch_service.dart';
+import '../models/document_image.dart';
+import '../models/document_verification_ui.dart';
 import '../models/reservation.dart';
 import '../models/reservation_guest.dart';
+import '../services/document_scan_service.dart';
 import '../services/reservation_service.dart';
+import 'mrz_scanner_sheet.dart';
 import 'reservation_document_scan_sheet.dart';
 import 'reservation_guest_form_dialog.dart';
 
@@ -11,6 +19,7 @@ Future<void> showReservationDetails(
   BuildContext context, {
   required Reservation reservation,
   required ReservationService service,
+  PitchService? pitchService,
 }) async {
   await showModalBottomSheet<void>(
     context: context,
@@ -23,6 +32,7 @@ Future<void> showReservationDetails(
         child: ReservationDetailsSheet(
           reservation: reservation,
           service: service,
+          pitchService: pitchService,
         ),
       );
     },
@@ -30,11 +40,14 @@ Future<void> showReservationDetails(
 }
 
 class ReservationDetailsSheet extends StatefulWidget {
-  const ReservationDetailsSheet({
+  ReservationDetailsSheet({
     super.key,
     required this.reservation,
     required this.service,
-  });
+    PitchService? pitchService,
+  }) : pitchService = pitchService ?? PitchService();
+
+  final PitchService pitchService;
 
   final Reservation reservation;
   final ReservationService service;
@@ -46,11 +59,146 @@ class ReservationDetailsSheet extends StatefulWidget {
 
 class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
   bool _isActionBusy = false;
+  late String _vehicleImageUrl;
+  late int _vehicleImageSizeBytes;
+  late final DocumentScanService _scanService = DocumentScanService();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.service.reconcileGuestState(widget.reservation.id);
+    widget.service.reconcileReservationPaymentFromPayments(
+      reservationId: widget.reservation.id,
+      fallbackGuestName: widget.reservation.primaryGuestName,
+    );
+    _vehicleImageUrl = widget.reservation.vehicleImageUrl;
+    _vehicleImageSizeBytes = widget.reservation.vehicleImageSizeBytes;
+  }
 
   String _formatDate(DateTime value) {
     final day = value.day.toString().padLeft(2, '0');
     final month = value.month.toString().padLeft(2, '0');
     return '$day.$month.${value.year}';
+  }
+
+  bool get _canChangePitch {
+    final status = widget.reservation.status;
+    return status != ReservationStatus.checkedOut &&
+        status != ReservationStatus.cancelled;
+  }
+
+  List<String> _updatedPitchIds(Reservation reservation, String nextPitchId) {
+    final currentIds = reservation.pitchIds.isNotEmpty
+        ? List<String>.from(reservation.pitchIds)
+        : <String>[
+            if (reservation.pitchId.trim().isNotEmpty) reservation.pitchId,
+          ];
+    if (currentIds.isEmpty) {
+      return <String>[nextPitchId];
+    }
+
+    final currentIndex = currentIds.indexOf(reservation.pitchId);
+    if (currentIndex >= 0) {
+      currentIds[currentIndex] = nextPitchId;
+    } else {
+      currentIds[0] = nextPitchId;
+    }
+
+    return currentIds.toSet().toList(growable: false);
+  }
+
+  Future<Pitch?> _pickPitch() async {
+    final pitches = await widget.pitchService.watchPitches().first;
+    if (!mounted || pitches.isEmpty) {
+      return null;
+    }
+
+    return showModalBottomSheet<Pitch>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(title: Text('Odaberi parcelu')),
+            ...pitches.map((pitch) {
+              final isCurrent = pitch.id == widget.reservation.pitchId;
+              return ListTile(
+                title: Text(pitch.name),
+                subtitle: Text(
+                  isCurrent
+                      ? 'Trenutno odabrana'
+                      : 'Status: ${pitch.status.displayLabel}',
+                ),
+                trailing: isCurrent ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.of(sheetContext).pop(pitch),
+              );
+            }),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _handleChangePitch() async {
+    if (_isActionBusy) {
+      return;
+    }
+
+    final selectedPitch = await _pickPitch();
+    if (!mounted || selectedPitch == null) {
+      return;
+    }
+    if (selectedPitch.id == widget.reservation.pitchId) {
+      return;
+    }
+
+    setState(() {
+      _isActionBusy = true;
+    });
+
+    try {
+      final updatedPitchIds = _updatedPitchIds(
+        widget.reservation,
+        selectedPitch.id,
+      );
+
+      await widget.service.updateReservation(
+        widget.reservation.copyWith(
+          pitchId: selectedPitch.id,
+          pitchName: selectedPitch.name,
+          pitchIds: updatedPitchIds,
+          pitchCount: updatedPitchIds.length,
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Rezervacija je prebačena na parcelu ${selectedPitch.name}.',
+          ),
+        ),
+      );
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = error is ReservationConflictException
+          ? error.message
+          : error.toString();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isActionBusy = false;
+        });
+      }
+    }
   }
 
   Future<void> _handleCheckIn() async {
@@ -154,8 +302,10 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
       _isActionBusy = true;
     });
     try {
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? 'unknown';
       await widget.service.checkOutReservation(
         reservationId: widget.reservation.id,
+        checkedOutByUid: uid,
       );
       if (!mounted) {
         return;
@@ -163,6 +313,115 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Gosti su odjavljeni, a parcela je ponovno slobodna.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isActionBusy = false;
+        });
+      }
+    }
+  }
+
+  Future<XFile?> _pickVehicleImage() async {
+    return showModalBottomSheet<XFile>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Slikaj vozilo'),
+                onTap: () async {
+                  final file = await _scanService.pickCameraImage();
+                  if (!sheetContext.mounted) {
+                    return;
+                  }
+                  Navigator.of(sheetContext).pop(file);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Odaberi iz galerije'),
+                onTap: () async {
+                  final file = await _scanService.pickGalleryImage();
+                  if (!sheetContext.mounted) {
+                    return;
+                  }
+                  Navigator.of(sheetContext).pop(file);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleVehicleImageUpload() async {
+    if (_isActionBusy) {
+      return;
+    }
+
+    final selected = await _pickVehicleImage();
+    if (selected == null) {
+      return;
+    }
+
+    if (!_scanService.isSupportedImageFile(selected)) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Podržani su samo JPG, JPEG i PNG.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isActionBusy = true;
+    });
+
+    try {
+      final upload = await _scanService.uploadVehicleImage(
+        reservationId: widget.reservation.id,
+        file: selected,
+        maxBytes: 100 * 1024,
+      );
+
+      await widget.service.updateReservation(
+        widget.reservation.copyWith(
+          vehicleImageUrl: upload.downloadUrl,
+          vehicleImagePath: upload.storagePath,
+          vehicleImageSizeBytes: upload.bytes.lengthInBytes,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _vehicleImageUrl = upload.downloadUrl;
+        _vehicleImageSizeBytes = upload.bytes.lengthInBytes;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Slika vozila je spremljena (${(_vehicleImageSizeBytes / 1024).toStringAsFixed(1)} KB).',
+          ),
         ),
       );
     } catch (error) {
@@ -218,6 +477,12 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
                 icon: const Icon(Icons.logout_rounded),
                 label: const Text('Odjavi goste'),
               ),
+            if (_canChangePitch)
+              OutlinedButton.icon(
+                onPressed: _isActionBusy ? null : _handleChangePitch,
+                icon: const Icon(Icons.swap_horiz_rounded),
+                label: const Text('Promijeni parcelu'),
+              ),
             OutlinedButton.icon(
               onPressed: _isActionBusy
                   ? null
@@ -230,6 +495,60 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
                     },
               icon: const Icon(Icons.document_scanner_outlined),
               label: const Text('Skeniraj dokument'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _isActionBusy
+                  ? null
+                  : () async {
+                      if (kIsWeb) {
+                        await showReservationDocumentScanFlow(
+                          context,
+                          reservation: reservation,
+                          reservationService: widget.service,
+                        );
+                        if (!context.mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'MRZ kamera trenutno nije dostupna u web pregledniku. Otvoren je standardni sken dokumenta.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      await showMrzScannerSheet(
+                        context,
+                        reservation: reservation,
+                        onSaveConfirmed: (guest, checksPassed) async {
+                          final acceptanceStatus = checksPassed
+                              ? DocumentAcceptanceStatus.accepted
+                              : DocumentAcceptanceStatus.acceptedWithReview;
+                          await widget.service.saveVerifiedGuest(
+                            reservation: reservation,
+                            guest: guest,
+                            images: const <DocumentImage>[],
+                            acceptanceStatus: acceptanceStatus,
+                            manualReviewCompleted: true,
+                            retentionPolicy:
+                                DocumentRetentionPolicy.retainManually,
+                            allowDuplicate: false,
+                          );
+                        },
+                      );
+                    },
+              icon: const Icon(Icons.document_scanner_outlined),
+              label: const Text('MRZ skeniranje'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _isActionBusy ? null : _handleVehicleImageUpload,
+              icon: const Icon(Icons.directions_car_outlined),
+              label: Text(
+                _vehicleImageUrl.trim().isEmpty
+                    ? 'Dodaj sliku vozila'
+                    : 'Zamijeni sliku vozila',
+              ),
             ),
             OutlinedButton.icon(
               onPressed: () {},
@@ -252,8 +571,9 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
               _InfoLine(label: 'Parcela', value: reservation.pitchName),
               _InfoLine(
                 label: 'Datumi',
-                value:
-                    '${_formatDate(reservation.checkInDate)} - ${_formatDate(reservation.checkOutDate)}',
+                value: reservation.departureDateUnknown
+                    ? '${_formatDate(reservation.checkInDate)} - odlazak nije poznat'
+                    : '${_formatDate(reservation.checkInDate)} - ${_formatDate(reservation.checkOutDate)}',
               ),
               _InfoLine(
                 label: 'Gosti',
@@ -261,10 +581,65 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
                     '${reservation.adults} odraslih, ${reservation.children} djece',
               ),
               _InfoLine(
+                label: 'Ukupno planirano',
+                value: '${reservation.guestCount}',
+              ),
+              _InfoLine(
                 label: 'Kontakt',
                 value:
                     '${reservation.primaryGuestPhone} / ${reservation.primaryGuestEmail}',
               ),
+              _InfoLine(
+                label: 'Opis vozila',
+                value: reservation.vehicleDescription.trim().isEmpty
+                    ? 'Nije upisano'
+                    : reservation.vehicleDescription,
+              ),
+              if (_vehicleImageUrl.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Slika vozila',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      GestureDetector(
+                        onTap: () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (dialogContext) {
+                              return Dialog(
+                                child: InteractiveViewer(
+                                  child: Image.network(_vehicleImageUrl),
+                                ),
+                              );
+                            },
+                          );
+                        },
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Image.network(
+                            _vehicleImageUrl,
+                            width: 140,
+                            height: 95,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      if (_vehicleImageSizeBytes > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Veličina: ${(_vehicleImageSizeBytes / 1024).toStringAsFixed(1)} KB',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -288,7 +663,7 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
               ),
               _InfoLine(
                 label: 'Status plaćanja',
-                value: reservation.paymentStatus.displayLabel,
+                value: reservation.effectivePaymentStatus.displayLabel,
               ),
             ],
           ),
@@ -385,6 +760,18 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        IconButton(
+                          onPressed: () async {
+                            await showReservationDocumentScanFlow(
+                              context,
+                              reservation: reservation,
+                              reservationService: widget.service,
+                              initialGuest: guest,
+                            );
+                          },
+                          icon: const Icon(Icons.document_scanner_outlined),
+                          tooltip: 'Skeniraj dokument',
+                        ),
                         IconButton(
                           onPressed: () {
                             showReservationGuestEditor(

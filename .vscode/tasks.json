@@ -1,0 +1,35 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Flutter Web - Run & Open",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"run",
+				"-d",
+				"chrome"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Open Chrome",
+			"type": "shell",
+			"command": "open",
+			"args": [
+				"-a",
+				"Google Chrome"
+			],
+			"presentation": {
+				"reveal": "silent"
+			}
+		}
+	]
+}

@@ -98,6 +98,14 @@ class _ReservationGuestFormDialogState
     return '$day.$month.${value.year}';
   }
 
+  void _applyGuestPreset(String label) {
+    setState(() {
+      _firstNameController.text = label;
+      _lastNameController.text = '';
+      _isPrimaryGuest = false;
+    });
+  }
+
   Future<void> _pickDate({required bool birthDate}) async {
     final initial = birthDate
         ? (_dateOfBirth ?? DateTime(1990, 1, 1))
@@ -208,24 +216,49 @@ class _ReservationGuestFormDialogState
             const SizedBox(height: 16),
             TextFormField(
               controller: _firstNameController,
-              decoration: const InputDecoration(labelText: 'Ime'),
+              decoration: const InputDecoration(
+                labelText: 'Ime ili opis (npr. Dijete)',
+              ),
               validator: (value) {
                 if ((value ?? '').trim().isEmpty) {
-                  return 'Ime je obavezno.';
+                  return 'Ime ili opis je obavezno.';
                 }
                 return null;
               },
             ),
             const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  label: const Text('Odrasli'),
+                  onPressed: () => _applyGuestPreset('Odrasli'),
+                ),
+                ActionChip(
+                  label: const Text('Dijete'),
+                  onPressed: () => _applyGuestPreset('Dijete'),
+                ),
+                ActionChip(
+                  label: const Text('Beba'),
+                  onPressed: () => _applyGuestPreset('Beba'),
+                ),
+                ActionChip(
+                  label: const Text('Pratnja'),
+                  onPressed: () => _applyGuestPreset('Pratnja'),
+                ),
+                ActionChip(
+                  label: const Text('Vozač'),
+                  onPressed: () => _applyGuestPreset('Vozač'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             TextFormField(
               controller: _lastNameController,
-              decoration: const InputDecoration(labelText: 'Prezime'),
-              validator: (value) {
-                if ((value ?? '').trim().isEmpty) {
-                  return 'Prezime je obavezno.';
-                }
-                return null;
-              },
+              decoration: const InputDecoration(
+                labelText: 'Prezime (opcionalno)',
+              ),
             ),
             const SizedBox(height: 12),
             Row(
@@ -276,10 +309,26 @@ class _ReservationGuestFormDialogState
               decoration: const InputDecoration(labelText: 'Spol'),
             ),
             const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              child: Text(
+                'Ovaj obrazac je za dokumente gosta. Slika vozila se dodaje u rezervaciji i prikazuje se pod parcelama.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            const SizedBox(height: 12),
             TextFormField(
               controller: _documentImagePathController,
               decoration: const InputDecoration(
-                labelText: 'Putanja slike dokumenta',
+                labelText: 'Putanja slike dokumenta (gost)',
               ),
             ),
             const SizedBox(height: 12),
