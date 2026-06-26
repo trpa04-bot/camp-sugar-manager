@@ -164,6 +164,8 @@ class _ReservationDocumentScanSheetState
   final List<_SelectedDocumentImage> _images = <_SelectedDocumentImage>[];
 
   bool _isBusy = false;
+  bool _isSelectingImage = false;
+  DocumentSide? _selectingSide;
   String? _errorMessage;
   String _progressText = '';
   DocumentScanProcessStatus _status = DocumentScanProcessStatus.selectingImages;
@@ -251,6 +253,10 @@ class _ReservationDocumentScanSheetState
     String? replaceId,
     DocumentImageSourceKind? forcedSource,
   }) async {
+    if (_isBusy || _isSelectingImage) {
+      return;
+    }
+
     if (_images.length >= 5 && replaceId == null) {
       setState(() {
         _errorMessage = 'Maksimalno je dopušteno 5 fotografija po gostu.';
@@ -258,138 +264,230 @@ class _ReservationDocumentScanSheetState
       return;
     }
 
-    final selected = await _pickImageForSide(side, forcedSource: forcedSource);
-    if (selected == null) {
-      debugPrint('[doc-flow] stage=file-pick code=no-file-selected');
-      setState(() {
-        _errorMessage = 'Nije odabrana datoteka.';
-      });
-      return;
-    }
-
-    debugPrint('[doc-flow] file selected: true');
-    debugPrint('[doc-flow] mime type: ${selected.mimeType ?? '(empty)'}');
-
-    final lowerName = selected.name.toLowerCase();
-    final mimeType = (selected.mimeType ?? '').toLowerCase();
-    final isPdf = lowerName.endsWith('.pdf') || mimeType == 'application/pdf';
-    if (isPdf) {
-      setState(() {
-        _errorMessage =
-            'PDF dokument je odabran. OCR obrada trenutno podržava samo slike (JPG, JPEG, PNG).';
-      });
-      return;
-    }
-
-    final supported = widget.documentScanService != null
-        ? widget.documentScanService!.isSupportedImageFile(selected)
-        : (widget.imagePickerOverride != null
-              ? true
-              : _isSupportedImage(selected));
-    if (!supported) {
-      debugPrint('[doc-flow] stage=file-pick code=unsupported-format');
-      setState(() {
-        _errorMessage = 'Nepodržan format.';
-      });
-      return;
-    }
-
-    Uint8List bytes;
-    try {
-      bytes = await selected.readAsBytes();
-    } catch (_) {
-      debugPrint('[doc-flow] stage=file-read code=read-failed');
-      setState(() {
-        _errorMessage = 'Datoteka se ne može pročitati.';
-      });
-      return;
-    }
-    debugPrint('[doc-flow] byte length: ${bytes.lengthInBytes}');
-    if (bytes.isEmpty) {
-      debugPrint('[doc-flow] stage=file-read code=empty-image');
-      setState(() {
-        _errorMessage = 'Slika je prazna.';
-      });
-      return;
-    }
-
-    debugPrint('[doc-flow] quality check started');
-    final qualityReport = await _qualityService.analyze(bytes);
-    final isHeicLike =
-        mimeType.contains('heic') ||
-        mimeType.contains('heif') ||
-        lowerName.endsWith('.heic') ||
-        lowerName.endsWith('.heif');
-
-    final blockingIssues = qualityReport.issues
-        .where((issue) => issue.blocking)
-        .toList(growable: false);
-    final decodeOnlyBlocking =
-        blockingIssues.isNotEmpty &&
-        blockingIssues.every((issue) => issue.code == 'decodeFailed');
-
-    if (qualityReport.hasBlockingIssues &&
-        !(isHeicLike && decodeOnlyBlocking)) {
-      final messages = _qualityMessageResolver.resolveMessages(blockingIssues);
-      debugPrint('[doc-flow] quality check failure');
-      setState(() {
-        _errorMessage =
-            'Provjera kvalitete nije uspjela. ${messages.join(' ')}';
-      });
-      return;
-    }
-    debugPrint('[doc-flow] quality check success');
-
-    final imageId = replaceId ?? _uuid.v4();
-    final nonBlockingIssues = qualityReport.issues
-        .where((issue) => !issue.blocking)
-        .toList(growable: false);
-    final warningMessages = _qualityMessageResolver.resolveMessages(
-      nonBlockingIssues,
-    );
-    final qualityWarningText = warningMessages.isEmpty
-        ? null
-        : warningMessages.take(2).join('\n');
-    final documentImage = _SelectedDocumentImage(
-      id: imageId,
-      file: selected,
-      bytes: bytes,
-      mimeType: mimeType,
-      side: side,
-      uploadStatus: DocumentImageUploadStatus.pending,
-      ocrStatus: DocumentImageOcrStatus.pending,
-      qualityWarningText: (isHeicLike && decodeOnlyBlocking)
-          ? 'Fotografija odabrana. Lokalni preview nije dostupan, obrada se nastavlja.'
-          : qualityWarningText,
-    );
-
     setState(() {
+      _isSelectingImage = true;
+      _selectingSide = side;
       _errorMessage = null;
-      if (replaceId != null) {
-        final idx = _images.indexWhere((image) => image.id == replaceId);
-        if (idx >= 0) {
-          _images[idx] = documentImage;
-        }
-      } else if (side == DocumentSide.frontIdCard ||
-          side == DocumentSide.backIdCard ||
-          side == DocumentSide.passport) {
-        final existing = _images.indexWhere((image) => image.side == side);
-        if (existing >= 0) {
-          _images[existing] = documentImage;
+      _progressText = 'Dodavanje fotografije: ${side.label.toLowerCase()}';
+    });
+
+    try {
+      final selected = await _pickImageForSide(
+        side,
+        forcedSource: forcedSource,
+      );
+      if (selected == null) {
+        debugPrint('[doc-flow] stage=file-pick code=no-file-selected');
+        setState(() {
+          _errorMessage = 'Nije odabrana datoteka.';
+        });
+        return;
+      }
+
+      debugPrint('[doc-flow] file selected: true');
+      debugPrint('[doc-flow] mime type: ${selected.mimeType ?? '(empty)'}');
+
+      final lowerName = selected.name.toLowerCase();
+      final mimeType = (selected.mimeType ?? '').toLowerCase();
+      final isPdf = lowerName.endsWith('.pdf') || mimeType == 'application/pdf';
+      if (isPdf) {
+        setState(() {
+          _errorMessage =
+              'PDF dokument je odabran. OCR obrada trenutno podržava samo slike (JPG, JPEG, PNG).';
+        });
+        return;
+      }
+
+      final supported = widget.documentScanService != null
+          ? widget.documentScanService!.isSupportedImageFile(selected)
+          : (widget.imagePickerOverride != null
+                ? true
+                : _isSupportedImage(selected));
+      if (!supported) {
+        debugPrint('[doc-flow] stage=file-pick code=unsupported-format');
+        setState(() {
+          _errorMessage = 'Nepodržan format.';
+        });
+        return;
+      }
+
+      Uint8List bytes;
+      try {
+        bytes = await selected.readAsBytes();
+      } catch (_) {
+        debugPrint('[doc-flow] stage=file-read code=read-failed');
+        setState(() {
+          _errorMessage = 'Datoteka se ne može pročitati.';
+        });
+        return;
+      }
+      debugPrint('[doc-flow] byte length: ${bytes.lengthInBytes}');
+      if (bytes.isEmpty) {
+        debugPrint('[doc-flow] stage=file-read code=empty-image');
+        setState(() {
+          _errorMessage = 'Slika je prazna.';
+        });
+        return;
+      }
+
+      debugPrint('[doc-flow] quality check started');
+      final qualityReport = await _qualityService.analyze(bytes);
+      final isHeicLike =
+          mimeType.contains('heic') ||
+          mimeType.contains('heif') ||
+          lowerName.endsWith('.heic') ||
+          lowerName.endsWith('.heif');
+
+      final blockingIssues = qualityReport.issues
+          .where((issue) => issue.blocking)
+          .toList(growable: false);
+      final decodeOnlyBlocking =
+          blockingIssues.isNotEmpty &&
+          blockingIssues.every((issue) => issue.code == 'decodeFailed');
+
+      if (qualityReport.hasBlockingIssues &&
+          !(isHeicLike && decodeOnlyBlocking)) {
+        final messages = _qualityMessageResolver.resolveMessages(
+          blockingIssues,
+        );
+        debugPrint('[doc-flow] quality check failure');
+        setState(() {
+          _errorMessage =
+              'Provjera kvalitete nije uspjela. ${messages.join(' ')}';
+        });
+        return;
+      }
+      debugPrint('[doc-flow] quality check success');
+
+      final imageId = replaceId ?? _uuid.v4();
+      final nonBlockingIssues = qualityReport.issues
+          .where((issue) => !issue.blocking)
+          .toList(growable: false);
+      final warningMessages = _qualityMessageResolver.resolveMessages(
+        nonBlockingIssues,
+      );
+      final qualityWarningText = warningMessages.isEmpty
+          ? null
+          : warningMessages.take(2).join('\n');
+      final documentImage = _SelectedDocumentImage(
+        id: imageId,
+        file: selected,
+        bytes: bytes,
+        mimeType: mimeType,
+        side: side,
+        uploadStatus: DocumentImageUploadStatus.pending,
+        ocrStatus: DocumentImageOcrStatus.pending,
+        qualityWarningText: (isHeicLike && decodeOnlyBlocking)
+            ? 'Fotografija odabrana. Lokalni preview nije dostupan, obrada se nastavlja.'
+            : qualityWarningText,
+      );
+
+      setState(() {
+        _errorMessage = null;
+        if (replaceId != null) {
+          final idx = _images.indexWhere((image) => image.id == replaceId);
+          if (idx >= 0) {
+            _images[idx] = documentImage;
+          }
+        } else if (side == DocumentSide.frontIdCard ||
+            side == DocumentSide.backIdCard ||
+            side == DocumentSide.passport) {
+          final existing = _images.indexWhere((image) => image.side == side);
+          if (existing >= 0) {
+            _images[existing] = documentImage;
+          } else {
+            _images.add(documentImage);
+          }
         } else {
           _images.add(documentImage);
         }
-      } else {
-        _images.add(documentImage);
+        _status = DocumentScanProcessStatus.selectingImages;
+        _progressText = 'Fotografija dodana: ${side.label.toLowerCase()}';
+      });
+    } finally {
+      if (!mounted) {
+        return;
       }
-      _status = DocumentScanProcessStatus.selectingImages;
-    });
+      setState(() {
+        _isSelectingImage = false;
+        _selectingSide = null;
+      });
+    }
   }
 
   void _removeImage(String imageId) {
     setState(() {
       _images.removeWhere((image) => image.id == imageId);
     });
+  }
+
+  bool get _hasFrontSide =>
+      _images.any((image) => image.side == DocumentSide.frontIdCard);
+
+  bool get _hasBackSide =>
+      _images.any((image) => image.side == DocumentSide.backIdCard);
+
+  bool get _hasPassport =>
+      _images.any((image) => image.side == DocumentSide.passport);
+
+  bool get _canProcessDocuments =>
+      _images.isNotEmpty && (_hasPassport || (_hasFrontSide && _hasBackSide));
+
+  String get _processButtonHint {
+    if (_hasPassport) {
+      return 'Putovnica dodana - spremno za obradu';
+    }
+    if (_hasFrontSide && !_hasBackSide) {
+      return 'Dodaj još stražnju stranu dokumenta';
+    }
+    if (!_hasFrontSide && _hasBackSide) {
+      return 'Dodaj još prednju stranu dokumenta';
+    }
+    if (_hasFrontSide && _hasBackSide) {
+      return 'Prednja i stražnja strana su dodane';
+    }
+    return 'Dodaj prednju i stražnju stranu ili putovnicu';
+  }
+
+  Widget _buildRequiredSideStatus(
+    String label,
+    bool isAdded, {
+    bool isActive = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final icon = isActive
+        ? SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: scheme.primary,
+            ),
+          )
+        : Icon(
+            isAdded ? Icons.check_circle : Icons.radio_button_unchecked,
+            size: 16,
+            color: isAdded ? Colors.green : scheme.onSurfaceVariant,
+          );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: isAdded
+            ? Colors.green.withValues(alpha: 0.12)
+            : scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: isAdded
+              ? Colors.green.withValues(alpha: 0.35)
+              : scheme.outlineVariant,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [icon, const SizedBox(width: 6), Text(label)],
+      ),
+    );
   }
 
   Future<XFile?> _pickImageForPlatform() async {
@@ -1203,14 +1301,14 @@ class _ReservationDocumentScanSheetState
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(DocumentSide.additional),
                 icon: const Icon(Icons.document_scanner_outlined),
                 label: const Text('Skeniraj dokument'),
               ),
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(
                         DocumentSide.additional,
@@ -1220,7 +1318,7 @@ class _ReservationDocumentScanSheetState
                 label: const Text('Odaberi iz galerije'),
               ),
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(
                         DocumentSide.additional,
@@ -1237,28 +1335,28 @@ class _ReservationDocumentScanSheetState
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(DocumentSide.frontIdCard),
                 icon: const Icon(Icons.badge_outlined),
                 label: const Text('Dodaj prednju stranu'),
               ),
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(DocumentSide.backIdCard),
                 icon: const Icon(Icons.credit_card),
                 label: const Text('Dodaj stražnju stranu'),
               ),
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(DocumentSide.passport),
                 icon: const Icon(Icons.travel_explore),
                 label: const Text('Dodaj putovnicu'),
               ),
               OutlinedButton.icon(
-                onPressed: _isBusy
+                onPressed: _isBusy || _isSelectingImage
                     ? null
                     : () => _addImage(DocumentSide.additional),
                 icon: const Icon(Icons.add_photo_alternate_outlined),
@@ -1266,9 +1364,41 @@ class _ReservationDocumentScanSheetState
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildRequiredSideStatus(
+                'Prednja strana',
+                _hasFrontSide,
+                isActive:
+                    _isSelectingImage &&
+                    _selectingSide == DocumentSide.frontIdCard,
+              ),
+              _buildRequiredSideStatus(
+                'Stražnja strana',
+                _hasBackSide,
+                isActive:
+                    _isSelectingImage &&
+                    _selectingSide == DocumentSide.backIdCard,
+              ),
+              _buildRequiredSideStatus(
+                'Putovnica (alternativa)',
+                _hasPassport,
+                isActive:
+                    _isSelectingImage &&
+                    _selectingSide == DocumentSide.passport,
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           Text('Status: $_statusDisplayLabel'),
           if (_progressText.isNotEmpty) Text(_progressText),
+          if (_isSelectingImage) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(),
+          ],
           const SizedBox(height: 8),
           if (_images.isNotEmpty)
             SizedBox(
@@ -1286,9 +1416,16 @@ class _ReservationDocumentScanSheetState
             ),
           const SizedBox(height: 8),
           FilledButton.icon(
-            onPressed: _isBusy || _images.isEmpty ? null : _processDocuments,
+            onPressed: (_isBusy || _isSelectingImage || !_canProcessDocuments)
+                ? null
+                : _processDocuments,
             icon: const Icon(Icons.settings_suggest_outlined),
             label: const Text('Obradi dokumente'),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _processButtonHint,
+            style: Theme.of(context).textTheme.bodySmall,
           ),
           if (_isBusy) ...[
             const SizedBox(height: 12),
