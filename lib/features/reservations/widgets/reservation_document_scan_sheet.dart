@@ -11,6 +11,7 @@ import '../models/reservation.dart';
 import '../models/reservation_document_scan_context.dart';
 import '../models/reservation_guest.dart';
 import '../services/document_ocr_cloud_service.dart';
+import '../services/document_ocr_error_resolver.dart';
 import '../services/document_image_source_adapter.dart';
 import '../services/document_image_quality_service.dart';
 import '../services/document_scan_quality_message_resolver.dart';
@@ -1067,26 +1068,13 @@ class _ReservationDocumentScanSheetState
     } on FirebaseFunctionsException catch (error) {
       debugPrint('[doc-flow] OCR call failure code=${error.code}');
       setState(() {
-        _errorMessage = 'OCR nije uspio.';
+        _errorMessage = const DocumentOcrErrorResolver().resolve(error);
         _status = DocumentScanProcessStatus.failed;
       });
     } catch (error) {
-      debugPrint('[doc-flow] stage=process code=unknown-failure');
+      debugPrint('[doc-flow] stage=process code=unknown-failure error=$error');
       setState(() {
-        final message = error.toString().toLowerCase();
-        if (message.contains('praz')) {
-          _errorMessage = 'Slika je prazna.';
-        } else if (message.contains('podrž') || message.contains('format')) {
-          _errorMessage = 'Nepodržan format.';
-        } else if (message.contains('upload')) {
-          _errorMessage = 'Upload nije uspio.';
-        } else if (message.contains('ocr')) {
-          _errorMessage = 'OCR nije uspio.';
-        } else if (message.contains('quality')) {
-          _errorMessage = 'Provjera kvalitete nije uspjela.';
-        } else {
-          _errorMessage = 'Datoteka se ne može pročitati.';
-        }
+        _errorMessage = const DocumentOcrErrorResolver().resolve(error);
         _status = DocumentScanProcessStatus.failed;
       });
     } finally {

@@ -112,6 +112,7 @@ class DocumentImageSourceAdapterWeb implements DocumentImageSourceAdapter {
       debugPrint('[doc-picker] file size: $fileSize');
 
       if (_shouldTranscodeToJpeg(fileName: file.name, mimeType: mimeType)) {
+        final isHeicLike = _isHeicLike(fileName: file.name, mimeType: mimeType);
         try {
           final transcoded = await _transcodeImageToJpeg(file);
           debugPrint('[doc-picker] byte length: ${transcoded.lengthInBytes}');
@@ -120,8 +121,21 @@ class DocumentImageSourceAdapterWeb implements DocumentImageSourceAdapter {
             name: _jpgFileName(file.name),
             mimeType: 'image/jpeg',
           );
-        } catch (_) {
-          // Fallback to raw bytes if browser-side transcode fails.
+        } catch (error) {
+          debugPrint('[doc-picker] transcode failed: $error');
+          // HEIC/HEIF cannot be decoded by most browsers. Returning the raw
+          // bytes would only push an undecodable file into upload/OCR and
+          // produce a confusing failure later, so fail fast with a clear,
+          // actionable message instead.
+          if (isHeicLike) {
+            throw StateError(
+              'HEIC/HEIF format nije podržan u pregledniku. '
+              'Na iPhoneu uključite Postavke > Kamera > Formati > '
+              '"Najkompatibilnije", ili odaberite JPG/PNG fotografiju.',
+            );
+          }
+          // For other (non-HEIC) types, raw bytes may still be a valid image
+          // the browser simply did not transcode; let it continue.
         }
       }
 
@@ -166,6 +180,15 @@ class DocumentImageSourceAdapterWeb implements DocumentImageSourceAdapter {
 
     // Transcode unknown image types (especially HEIC/HEIF) to JPEG.
     return isLikelyHeic || isImageByMime;
+  }
+
+  bool _isHeicLike({required String fileName, String? mimeType}) {
+    final normalizedName = fileName.toLowerCase();
+    final normalizedMime = (mimeType ?? '').toLowerCase();
+    return normalizedMime.contains('heic') ||
+        normalizedMime.contains('heif') ||
+        normalizedName.endsWith('.heic') ||
+        normalizedName.endsWith('.heif');
   }
 
   String _jpgFileName(String originalName) {

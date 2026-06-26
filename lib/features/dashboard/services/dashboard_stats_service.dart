@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/date_utils.dart' as app_date;
 import '../../parcels/models/pitch.dart';
 import '../../reservations/models/reservation.dart';
 import '../../reservations/services/reservation_service.dart';
@@ -76,16 +77,11 @@ class DashboardStatsService {
 
   double _effectiveGrossAmount(Reservation reservation) {
     if (reservation.departureDateUnknown && reservation.pricePerNight > 0) {
-      final today = DateTime.now();
-      final currentDay = DateTime(today.year, today.month, today.day);
-      final startDay = DateTime(
-        reservation.checkInDate.year,
-        reservation.checkInDate.month,
-        reservation.checkInDate.day,
+      final billedNights = app_date.nightsBetween(
+        reservation.checkInDate,
+        DateTime.now(),
+        minimum: 1,
       );
-
-      final elapsedNights = currentDay.difference(startDay).inDays;
-      final billedNights = elapsedNights < 1 ? 1 : elapsedNights;
       return reservation.pricePerNight * billedNights;
     }
 

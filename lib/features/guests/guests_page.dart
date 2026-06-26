@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/utils/date_utils.dart' as app_date;
 import '../parcels/models/pitch.dart';
 import '../parcels/services/pitch_service.dart';
 import '../reservations/models/reservation.dart';
@@ -327,19 +328,14 @@ class _GuestsPageState extends State<GuestsPage> {
   }
 
   String _formatDate(DateTime? value) {
-    if (value == null) {
-      return '-';
-    }
-    final day = value.day.toString().padLeft(2, '0');
-    final month = value.month.toString().padLeft(2, '0');
-    return '$day.$month.${value.year}';
+    return app_date.formatDateOrDash(value);
   }
 
   String _formatDateRange(DateTimeRange? range) {
     if (range == null) {
       return 'Svi datumi';
     }
-    return '${_formatDate(range.start)} - ${_formatDate(range.end)}';
+    return app_date.formatDateRange(range.start, range.end);
   }
 
   int _calculateNights(Reservation reservation) {

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/utils/date_utils.dart' as app_date;
 import '../../parcels/models/pitch.dart';
 import '../../parcels/services/pitch_service.dart';
 import '../models/document_image.dart';
@@ -76,9 +77,7 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
   }
 
   String _formatDate(DateTime value) {
-    final day = value.day.toString().padLeft(2, '0');
-    final month = value.month.toString().padLeft(2, '0');
-    return '$day.$month.${value.year}';
+    return app_date.formatDate(value);
   }
 
   bool get _canChangePitch {
@@ -512,8 +511,11 @@ class _ReservationDetailsSheetState extends State<ReservationDetailsSheet> {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text(
-                              'MRZ kamera trenutno nije dostupna u web pregledniku. Otvoren je standardni sken dokumenta.',
+                              'U pregledniku se MRZ čita iz fotografije dokumenta. '
+                              'Učitajte ili slikajte donji dio dokumenta — podaci '
+                              'se prepoznaju automatski.',
                             ),
+                            duration: Duration(seconds: 5),
                           ),
                         );
                         return;
