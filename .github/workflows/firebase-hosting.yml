@@ -4,9 +4,17 @@ on:
   pull_request:
     branches:
       - main
+    types:
+      - opened
+      - synchronize
+      - reopened
   push:
     branches:
       - main
+
+concurrency:
+  group: firebase-hosting-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -76,7 +84,7 @@ jobs:
         run: firebase hosting:channel:deploy pr-${{ github.event.number }} --expires 7d --project camp-sugar-manager --config firebase.ci.json
 
   deploy_live:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     steps:
