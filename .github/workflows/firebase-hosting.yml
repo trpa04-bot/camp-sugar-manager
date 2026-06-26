@@ -101,9 +101,13 @@ jobs:
             credentials_json="$FIREBASE_SERVICE_ACCOUNT"
           else
             credentials_json="$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode)"
-            printf '%s' "$credentials_json" | jq -e . >/dev/null
+            printf '%s' "$credentials_json" | jq -e . >/dev/null || {
+              echo 'Error: Decoded credentials are not valid JSON' >&2
+              exit 1
+            }
           fi
 
+          echo "::add-mask::$credentials_json"
           {
             echo 'credentials_json<<EOF'
             printf '%s\n' "$credentials_json"
