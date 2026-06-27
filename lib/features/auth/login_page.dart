@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class LoginPage extends StatefulWidget {
@@ -108,7 +109,10 @@ class _LoginPageState extends State<LoginPage> {
                     TextFormField(
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
-                      autofillHints: const [AutofillHints.username],
+                      textInputAction: TextInputAction.next,
+                      autofillHints: kIsWeb
+                          ? null
+                          : const [AutofillHints.username],
                       decoration: const InputDecoration(
                         labelText: 'Email',
                         prefixIcon: Icon(Icons.mail_outline),
@@ -128,7 +132,15 @@ class _LoginPageState extends State<LoginPage> {
                     TextFormField(
                       controller: _passwordController,
                       obscureText: _obscurePassword,
-                      autofillHints: const [AutofillHints.password],
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) {
+                        if (!_isLoading) {
+                          _login();
+                        }
+                      },
+                      autofillHints: kIsWeb
+                          ? null
+                          : const [AutofillHints.password],
                       decoration: InputDecoration(
                         labelText: 'Lozinka',
                         prefixIcon: const Icon(Icons.lock_outline),
